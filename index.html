@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Incident Investigator</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #060e1a; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+
+/* ── App shell ── */
+#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ── Header ── */
+#header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; background: #050c16;
+  border-bottom: 1px solid #1e293b; flex-shrink: 0;
+}
+#header h1 { font-size: 14px; font-weight: 700; color: #e2e8f0; letter-spacing: -.01em; }
+#header h1 span { color: #3b82f6; }
+#conn-status {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: 10px; color: #64748b;
+}
+#conn-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #334155;
+  transition: background .3s;
+}
+#conn-dot.connected { background: #22c55e; }
+#conn-dot.error     { background: #ef4444; }
+#token-clear {
+  font-size: 10px; color: #334155; background: none; border: none;
+  cursor: pointer; padding: 0; font-family: inherit;
+}
+#token-clear:hover { color: #64748b; }
+
+/* ── Analysis mode selector ── */
+#mode-bar {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 16px; background: #080f1a;
+  border-bottom: 1px solid #1e293b; flex-shrink: 0;
+}
+.analysis-mode-btn {
+  padding: 10px 16px; background: none; border: none; border-bottom: 2px solid transparent;
+  color: #64748b; font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: color .15s, border-color .15s;
+}
+.analysis-mode-btn:hover { color: #94a3b8; }
+.analysis-mode-btn.active { color: #93c5fd; border-bottom-color: #3b82f6; }
+#mode-description {
+  margin-left: auto; font-size: 10px; color: #334155;
+  font-style: italic; padding-right: 4px;
+}
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 8px 14px; border-bottom: 1px solid #1e293b;
+  background: #080f1a; flex-shrink: 0;
+}
+.input-mode-btn {
+  padding: 3px 11px; background: #0f172a; border: 1px solid #1e293b;
+  color: #64748b; border-radius: 4px; font-size: 10px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: border-color .12s, color .12s, background .12s;
+  white-space: nowrap;
+}
+.input-mode-btn:hover { border-color: #334155; color: #94a3b8; }
+.input-mode-btn.active { border-color: #3b82f6; color: #93c5fd; background: #0f1f3d; }
+#gen-btn {
+  background: #1d4ed8; color: #fff; border: none; border-radius: 4px;
+  padding: 4px 14px; font-size: 11px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; transition: background .15s;
+}
+#gen-btn:hover { background: #2563eb; }
+#gen-btn:disabled { background: #1e3a6e; color: #64748b; cursor: not-allowed; }
+#ii-status { font-size: 10px; color: #60a5fa; }
+
+/* ── Input area ── */
+#input-area {
+  padding: 10px 14px; border-bottom: 1px solid #1e293b;
+  background: #080f1a; flex-shrink: 0;
+}
+.text-input {
+  width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+  border-radius: 4px; padding: 6px 10px; font-size: 11px; font-family: inherit; outline: none;
+}
+.text-input:focus { border-color: #3b82f6; }
+textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
+.input-hint { font-size: 9px; color: #334155; margin-top: 4px; }
+
+/* ── Theme strip ── */
+#theme-strip {
+  display: flex; align-items: center; gap: 6px; padding: 6px 14px;
+  border-bottom: 1px solid #1e293b; background: #060e1a; flex-shrink: 0;
+}
+#theme-strip span { font-size: 9px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: .06em; }
+.theme-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 8px; background: none; border: 1px solid #1e293b;
+  border-radius: 3px; cursor: pointer; font-family: inherit; font-size: 9px; font-weight: 700;
+  transition: border-color .12s;
+}
+.theme-btn:hover { border-color: #334155; }
+.theme-btn.active { border-color: #3b82f6; }
+.theme-swatch { width: 14px; height: 14px; border-radius: 2px; border: 1px solid rgba(255,255,255,.1); }
+#custom-colors { display: flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 9px; color: #334155; }
+#custom-colors label { cursor: pointer; }
+#custom-text-color, #custom-bg-color { width: 22px; height: 18px; border: none; padding: 0; cursor: pointer; background: none; }
+
+/* ── Thinking panel ── */
+#thinking-panel {
+  flex-shrink: 0; overflow: hidden; max-height: 0;
+  transition: max-height .3s ease; background: #050b15;
+  border-bottom: 1px solid #0f1f3d;
+}
+#thinking-panel.open { max-height: 140px; }
+#thinking-inner { display: flex; align-items: flex-start; gap: 10px; padding: 8px 14px; height: 120px; }
+#thinking-text {
+  flex: 1; font-size: 10px; font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #334155; line-height: 1.6; overflow-y: auto; white-space: pre-wrap;
+  word-break: break-word; height: 100%;
+}
+.thinking-badge { flex-shrink: 0; font-size: 9px; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: .06em; padding-top: 1px; }
+#thinking-toggle { flex-shrink: 0; background: none; border: none; color: #334155; font-size: 9px; cursor: pointer; padding: 0; font-family: inherit; align-self: flex-start; padding-top: 1px; }
+#thinking-toggle:hover { color: #64748b; }
+
+/* ── Output ── */
+#output-wrap { flex: 1; overflow: auto; padding: 14px 18px; }
+#output {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px; line-height: 1.6; color: #e2e8f0;
+  background: #050d18; white-space: pre-wrap; word-break: break-word;
+  margin: 0; min-height: 120px;
+}
+
+/* ── Footer ── */
+#footer {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 14px; border-top: 1px solid #1e293b;
+  background: #080f1a; flex-shrink: 0;
+}
+.act-btn {
+  padding: 4px 12px; background: none; border: 1px solid #1e293b;
+  color: #64748b; border-radius: 4px; font-size: 10px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: border-color .12s, color .12s;
+}
+.act-btn:hover { border-color: #334155; color: #94a3b8; }
+.act-btn.primary { border-color: #1d4ed8; color: #60a5fa; }
+.act-btn.primary:hover { border-color: #3b82f6; color: #93c5fd; background: rgba(59,130,246,.08); }
+#followup-status { font-size: 10px; color: #60a5fa; }
+
+/* ── Token gate ── */
+#token-gate {
+  position: fixed; inset: 0; background: rgba(5,12,22,.95);
+  display: flex; align-items: center; justify-content: center; z-index: 999;
+}
+#token-gate.hidden { display: none; }
+#token-box {
+  background: #0f172a; border: 1px solid #1e293b; border-radius: 8px;
+  padding: 28px 32px; max-width: 460px; width: 90%;
+}
+#token-box h2 { font-size: 14px; font-weight: 700; color: #e2e8f0; margin-bottom: 8px; }
+#token-box p { font-size: 11px; color: #64748b; line-height: 1.6; margin-bottom: 16px; }
+#token-box code { background: #1e293b; padding: 2px 6px; border-radius: 3px; font-size: 10px; color: #93c5fd; }
+#token-input { width: 100%; margin-bottom: 10px; }
+#token-submit {
+  width: 100%; padding: 8px; background: #1d4ed8; color: #fff; border: none;
+  border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+#token-submit:hover { background: #2563eb; }
+#token-error { font-size: 10px; color: #ef4444; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ── -->
+  <div id="header">
+    <h1>&#128683; Incident <span>Investigator</span></h1>
+    <div id="conn-status">
+      <div id="conn-dot"></div>
+      <span id="conn-label">Disconnected</span>
+    </div>
+    <button id="token-clear" onclick="iiClearToken()" title="Clear stored token and reconnect">&#128274; Clear token</button>
+  </div>
+
+  <!-- ── Analysis mode selector ── -->
+  <div id="mode-bar">
+    <button class="analysis-mode-btn active" data-analysis="triage"      onclick="iiSetAnalysis('triage')">&#9888;&#65039; Triage / RCA</button>
+    <button class="analysis-mode-btn"        data-analysis="fix_advisor"  onclick="iiSetAnalysis('fix_advisor')">&#128295; Fix Advisor</button>
+    <button class="analysis-mode-btn"        data-analysis="minimal_fix"  onclick="iiSetAnalysis('minimal_fix')">&#9889; Minimal Fix</button>
+    <span id="mode-description">Full forensic analysis &mdash; timeline, root cause, remediation</span>
+  </div>
+
+  <!-- ── Input mode toolbar ── -->
+  <div id="toolbar">
+    <div style="display:flex;gap:4px;flex-wrap:wrap" id="input-mode-btns">
+      <button class="input-mode-btn active" data-mode="clickup"      onclick="iiSetInputMode('clickup')">&#128203; ClickUp Ticket</button>
+      <button class="input-mode-btn"        data-mode="slack_thread" onclick="iiSetInputMode('slack_thread')">&#128172; Slack Thread</button>
+      <button class="input-mode-btn"        data-mode="description"  onclick="iiSetInputMode('description')">&#128221; Description</button>
+      <button class="input-mode-btn"        data-mode="stacktrace"   onclick="iiSetInputMode('stacktrace')">&#128030; Stacktrace</button>
+    </div>
+    <div style="width:1px;height:18px;background:#1e293b;flex-shrink:0"></div>
+    <button id="gen-btn" onclick="iiGenerate()">&#9654; Generate</button>
+    <span id="ii-status"></span>
+  </div>
+
+  <!-- ── Input area ── -->
+  <div id="input-area">
+    <div id="input-clickup">
+      <input id="val-clickup" type="text" class="text-input" style="max-width:400px"
+        placeholder="Ticket ID &mdash; e.g. AOP-6518, DEV-63860">
+      <div class="input-hint">Searches Slack for mentions &middot; runs git log with ticket reference &middot; synthesises analysis</div>
+    </div>
+    <div id="input-slack_thread" style="display:none">
+      <input id="val-slack_thread" type="text" class="text-input" style="max-width:600px"
+        placeholder="Slack thread URL &mdash; e.g. https://amelco.slack.com/archives/C.../p...">
+      <div class="input-hint">Fetches the full thread &middot; extracts context &middot; runs selected analysis</div>
+    </div>
+    <div id="input-description" style="display:none">
+      <textarea id="val-description" class="text-input"
+        placeholder="Describe the incident, bug or issue in your own words&#10;&#10;Include: symptoms, affected services, when it started, what changed recently..."></textarea>
+    </div>
+    <div id="input-stacktrace" style="display:none">
+      <textarea id="val-stacktrace" class="text-input"
+        style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:10px;min-height:120px"
+        placeholder="Paste a Java stack trace here&#10;&#10;java.lang.NullPointerException at..."></textarea>
+    </div>
+  </div>
+
+  <!-- ── Theme strip ── -->
+  <div id="theme-strip">
+    <span>&#127820; Canvas</span>
+    <button class="theme-btn active" data-theme="dark"      onclick="iiSetTheme('dark')">      <span class="theme-swatch" style="background:#050d18"></span> <span style="color:#e2e8f0">AA</span> Dark</button>
+    <button class="theme-btn"        data-theme="matrix"    onclick="iiSetTheme('matrix')">    <span class="theme-swatch" style="background:#001100"></span> <span style="color:#00ff41">AA</span> Matrix</button>
+    <button class="theme-btn"        data-theme="blueprint" onclick="iiSetTheme('blueprint')"> <span class="theme-swatch" style="background:#001833"></span> <span style="color:#4fc3f7">AA</span> Blueprint</button>
+    <button class="theme-btn"        data-theme="amber"     onclick="iiSetTheme('amber')">     <span class="theme-swatch" style="background:#120800"></span> <span style="color:#ffb300">AA</span> Amber</button>
+    <button class="theme-btn"        data-theme="chalk"     onclick="iiSetTheme('chalk')">     <span class="theme-swatch" style="background:#1a1a2e"></span> <span style="color:#e0e0ff">AA</span> Chalk</button>
+    <button class="theme-btn"        data-theme="light"     onclick="iiSetTheme('light')">     <span class="theme-swatch" style="background:#f8fafc"></span> <span style="color:#1e293b">AA</span> Light</button>
+    <div id="custom-colors">
+      Custom: <label>Text <input type="color" id="custom-text-color" value="#e2e8f0" oninput="iiSetCustomTheme()"></label>
+      <label>BG <input type="color" id="custom-bg-color"  value="#050d18" oninput="iiSetCustomTheme()"></label>
+    </div>
+  </div>
+
+  <!-- ── Thinking panel ── -->
+  <div id="thinking-panel">
+    <div id="thinking-inner">
+      <span class="thinking-badge">&#129504; Reasoning</span>
+      <pre id="thinking-text"></pre>
+      <button id="thinking-toggle" onclick="iiToggleThinking()" title="Collapse">&#9650;</button>
+    </div>
+  </div>
+
+  <!-- ── Output ── -->
+  <div id="output-wrap">
+    <pre id="output"><span style="color:#334155;font-style:italic">
+  ┌───────────────────────────────────────────────────────────────────┐
+  │  Select an analysis mode and input type, enter your data,        │
+  │  and click ▶ Generate.                                           │
+  │                                                                   │
+  │  Triage / RCA   — full forensic report: timeline, root cause,    │
+  │                   remediation steps                               │
+  │                                                                   │
+  │  Fix Advisor    — repo identification, proposed fix, effort       │
+  │                   estimate (XS–XL), risk level                    │
+  │                                                                   │
+  │  Minimal Fix    — smallest safe change, affected files, tech      │
+  │                   debt explicitly called out                      │
+  └───────────────────────────────────────────────────────────────────┘
+</span></pre>
+  </div>
+
+  <!-- ── Footer ── -->
+  <div id="footer">
+    <button id="followup-btn" class="act-btn primary" onclick="iiFollowUp()" style="display:none">&#128295; Code Change Suggestions</button>
+    <button id="save-btn"     class="act-btn"         onclick="iiSave()"     style="display:none">&#8659; Save .md</button>
+    <span id="followup-status"></span>
+  </div>
+
+</div><!-- #app -->
+
+<!-- ── Token gate overlay ── -->
+<div id="token-gate">
+  <div id="token-box">
+    <h2>&#128274; Bridge token required</h2>
+    <p>
+      The Incident Investigator connects to the GPS&middot;ADR bridge on
+      <code>localhost:7432</code>. Paste your bridge token below &mdash; find it by running:<br><br>
+      <code>cat ~/.cache/claude-bridge/state.json | python3 -m json.tool</code>
+    </p>
+    <input id="token-input" type="text" class="text-input" placeholder="Paste token here…" onkeydown="if(event.key==='Enter') iiSubmitToken()">
+    <button id="token-submit" onclick="iiSubmitToken()">Connect</button>
+    <div id="token-error"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+var _analysis  = 'triage';          // triage | fix_advisor | minimal_fix
+var _inputMode = 'clickup';
+var _ws        = null;
+var _token     = null;
+var _lastReport   = '';
+var _lastAnalysis = '';
+var _lastMode     = '';
+var _lastInput    = '';
+var _reconnectTimer = null;
+
+var _MODES = {
+  triage:      { label: 'Full forensic analysis — timeline, root cause, remediation', hasFollowup: true,  sendEvent: 'triage_report',      progressEvent: 'triage_progress',      completeEvent: 'triage_complete',      reportKey: 'report' },
+  fix_advisor: { label: 'Repo identification, proposed fix, effort estimate, risk level',  hasFollowup: false, sendEvent: 'fix_advisor_report',  progressEvent: 'fix_advisor_progress',  completeEvent: 'fix_advisor_complete',  reportKey: 'report' },
+  minimal_fix: { label: 'Smallest safe change, affected files, tech debt called out',      hasFollowup: false, sendEvent: 'minimal_fix_report',  progressEvent: 'minimal_fix_progress',  completeEvent: 'minimal_fix_complete',  reportKey: 'report' },
+};
+
+var _THEMES = {
+  dark:      { bg: '#050d18', color: '#e2e8f0' },
+  matrix:    { bg: '#001100', color: '#00ff41' },
+  blueprint: { bg: '#001833', color: '#4fc3f7' },
+  amber:     { bg: '#120800', color: '#ffb300' },
+  chalk:     { bg: '#1a1a2e', color: '#e0e0ff' },
+  light:     { bg: '#f8fafc', color: '#1e293b' },
+};
+
+// ── Token management ────────────────────────────────────────────────────────
+function _loadToken() {
+  return localStorage.getItem('ii_bridge_token') || null;
+}
+
+function _saveToken(t) {
+  localStorage.setItem('ii_bridge_token', t);
+  _token = t;
+}
+
+window.iiClearToken = function() {
+  localStorage.removeItem('ii_bridge_token');
+  _token = null;
+  if (_ws) { try { _ws.close(); } catch(e) {} _ws = null; }
+  _setConnStatus('disconnected');
+  document.getElementById('token-gate').classList.remove('hidden');
+};
+
+window.iiSubmitToken = function() {
+  var t = (document.getElementById('token-input').value || '').trim();
+  if (!t) {
+    document.getElementById('token-error').textContent = 'Token cannot be empty.';
+    return;
+  }
+  _saveToken(t);
+  document.getElementById('token-gate').classList.add('hidden');
+  document.getElementById('token-error').textContent = '';
+  _connect();
+};
+
+// ── WebSocket connection ────────────────────────────────────────────────────
+function _setConnStatus(state) {
+  var dot   = document.getElementById('conn-dot');
+  var label = document.getElementById('conn-label');
+  dot.className   = state === 'connected' ? 'connected' : (state === 'error' ? 'error' : '');
+  label.textContent = state === 'connected' ? 'Connected' : (state === 'error' ? 'Error' : 'Disconnected');
+}
+
+function _connect() {
+  if (!_token) return;
+  if (_ws && (_ws.readyState === WebSocket.CONNECTING || _ws.readyState === WebSocket.OPEN)) return;
+
+  var url = 'ws://localhost:7432/ws?token=' + encodeURIComponent(_token);
+  _ws = new WebSocket(url);
+
+  _ws.onopen = function() {
+    _setConnStatus('connected');
+    if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
+  };
+
+  _ws.onclose = function() {
+    _setConnStatus('disconnected');
+    _ws = null;
+    _reconnectTimer = setTimeout(_connect, 3000);
+  };
+
+  _ws.onerror = function() {
+    _setConnStatus('error');
+  };
+
+  _ws.onmessage = function(evt) {
+    try {
+      var msg = JSON.parse(evt.data);
+      _dispatch(msg);
+    } catch(e) {}
+  };
+}
+
+function _send(type, payload) {
+  if (!_ws || _ws.readyState !== WebSocket.OPEN) {
+    _setStatus('⚠ Bridge not connected');
+    return false;
+  }
+  _ws.send(JSON.stringify(Object.assign({ type: type }, payload)));
+  return true;
+}
+
+// ── Event dispatcher ────────────────────────────────────────────────────────
+function _dispatch(msg) {
+  var type = msg.type || '';
+
+  if (type === 'thinking') {
+    var panel = document.getElementById('thinking-panel');
+    var txt   = document.getElementById('thinking-text');
+    if (txt) txt.textContent += (msg.text || '');
+    if (txt) txt.scrollTop = txt.scrollHeight;
+    if (panel && !panel.classList.contains('open')) panel.classList.add('open');
+    return;
+  }
+
+  if (type === 'status') {
+    _setStatus(msg.text || '');
+    return;
+  }
+
+  if (type === 'error') {
+    _enableGenBtn();
+    _setStatus('⚠ ' + (msg.message || 'Error'));
+    return;
+  }
+
+  // Progress events — any *_progress pattern
+  if (type.endsWith('_progress')) {
+    var out = document.getElementById('output');
+    if (out) { out.textContent = msg.text || ''; _applyTheme(); out.scrollTop = out.scrollHeight; }
+    return;
+  }
+
+  // triage_progress also carries a .text field (legacy shape)
+  if (type === 'triage_progress') {
+    var out2 = document.getElementById('output');
+    if (out2) { out2.textContent = msg.text || ''; _applyTheme(); out2.scrollTop = out2.scrollHeight; }
+    return;
+  }
+
+  // Complete events
+  if (type === 'triage_complete') {
+    _onComplete(msg.report || '');
+    return;
+  }
+  if (type === 'fix_advisor_complete') {
+    _onComplete(msg.report || '');
+    return;
+  }
+  if (type === 'minimal_fix_complete') {
+    _onComplete(msg.report || '');
+    return;
+  }
+
+  // Triage follow-up
+  if (type === 'triage_followup_progress') {
+    var out3 = document.getElementById('output');
+    if (out3 && msg.text) {
+      var base = _lastReport + '\n\n' + Array(65).join('─') + '\n CODE CHANGE SUGGESTIONS\n' + Array(65).join('─') + '\n';
+      out3.textContent = base + msg.text;
+      _applyTheme();
+      out3.scrollTop = out3.scrollHeight;
+    }
+    return;
+  }
+  if (type === 'triage_followup_complete') {
+    var extra = msg.suggestions || '';
+    _lastReport = _lastReport + '\n\n' + Array(65).join('─') + '\n CODE CHANGE SUGGESTIONS\n' + Array(65).join('─') + '\n' + extra;
+    var out4 = document.getElementById('output');
+    if (out4) { out4.textContent = _lastReport; _applyTheme(); }
+    var fb = document.getElementById('followup-btn');
+    if (fb) fb.disabled = false;
+    document.getElementById('followup-status').textContent = '✓ Suggestions added';
+    return;
+  }
+}
+
+function _onComplete(report) {
+  var tp = document.getElementById('thinking-panel');
+  var tg = document.getElementById('thinking-toggle');
+  if (tp) { tp.classList.remove('open'); if (tg) tg.textContent = '▼'; }
+
+  _lastReport = report;
+  var out = document.getElementById('output');
+  if (out) { out.textContent = report; _applyTheme(); }
+
+  _enableGenBtn();
+  _setStatus('✓ Done');
+
+  var mode  = _MODES[_analysis];
+  var fb    = document.getElementById('followup-btn');
+  var saveb = document.getElementById('save-btn');
+  if (fb)    fb.style.display    = (report && mode && mode.hasFollowup) ? '' : 'none';
+  if (saveb) saveb.style.display = report ? '' : 'none';
+}
+
+// ── UI helpers ──────────────────────────────────────────────────────────────
+function _setStatus(text) {
+  var el = document.getElementById('ii-status');
+  if (el) el.textContent = text;
+}
+
+function _enableGenBtn() {
+  var btn = document.getElementById('gen-btn');
+  if (btn) btn.disabled = false;
+}
+
+function _getInput() {
+  var m = _inputMode;
+  if (m === 'clickup')      return (document.getElementById('val-clickup')      || {}).value || '';
+  if (m === 'slack_thread') return (document.getElementById('val-slack_thread') || {}).value || '';
+  if (m === 'description')  return (document.getElementById('val-description')  || {}).value || '';
+  if (m === 'stacktrace')   return (document.getElementById('val-stacktrace')   || {}).value || '';
+  return '';
+}
+
+// ── Analysis mode switching ─────────────────────────────────────────────────
+window.iiSetAnalysis = function(mode) {
+  _analysis = mode;
+  document.querySelectorAll('.analysis-mode-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.analysis === mode);
+  });
+  var desc = document.getElementById('mode-description');
+  if (desc && _MODES[mode]) desc.textContent = _MODES[mode].label;
+
+  // Show/hide followup button based on mode capability
+  var fb = document.getElementById('followup-btn');
+  if (fb && !_lastReport) fb.style.display = 'none';
+  if (fb && _lastReport)  fb.style.display = (_MODES[mode] && _MODES[mode].hasFollowup) ? '' : 'none';
+};
+
+// ── Input mode switching ────────────────────────────────────────────────────
+window.iiSetInputMode = function(mode) {
+  _inputMode = mode;
+  document.querySelectorAll('.input-mode-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  ['clickup', 'slack_thread', 'description', 'stacktrace'].forEach(function(m) {
+    var el = document.getElementById('input-' + m);
+    if (el) el.style.display = m === mode ? '' : 'none';
+  });
+};
+
+// ── Theme ───────────────────────────────────────────────────────────────────
+function _applyTheme() {
+  var out = document.getElementById('output');
+  if (!out) return;
+  out.style.color      = _currentTheme.color;
+  out.style.background = _currentTheme.bg;
+}
+
+var _currentTheme = _THEMES.dark;
+
+window.iiSetTheme = function(name) {
+  if (!_THEMES[name]) return;
+  _currentTheme = _THEMES[name];
+  document.querySelectorAll('.theme-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.theme === name);
+  });
+  _applyTheme();
+};
+
+window.iiSetCustomTheme = function() {
+  var textEl = document.getElementById('custom-text-color');
+  var bgEl   = document.getElementById('custom-bg-color');
+  if (!textEl || !bgEl) return;
+  _currentTheme = { color: textEl.value, bg: bgEl.value };
+  document.querySelectorAll('.theme-btn').forEach(function(b) { b.classList.remove('active'); });
+  _applyTheme();
+};
+
+// ── Generate ────────────────────────────────────────────────────────────────
+window.iiGenerate = function() {
+  var input = _getInput().trim();
+  if (!input) { _setStatus('⚠ Enter input above'); return; }
+
+  var modeConf = _MODES[_analysis];
+  if (!modeConf) return;
+
+  _lastReport = ''; _lastAnalysis = _analysis; _lastMode = _inputMode; _lastInput = input;
+
+  var out = document.getElementById('output');
+  if (out) { out.textContent = ''; _applyTheme(); }
+
+  var btn = document.getElementById('gen-btn');
+  if (btn) btn.disabled = true;
+  _setStatus('Generating…');
+
+  document.getElementById('followup-btn').style.display  = 'none';
+  document.getElementById('save-btn').style.display      = 'none';
+  document.getElementById('followup-status').textContent = '';
+
+  var tp = document.getElementById('thinking-panel');
+  var tt = document.getElementById('thinking-text');
+  var tg = document.getElementById('thinking-toggle');
+  if (tp) tp.classList.remove('open');
+  if (tt) tt.textContent = '';
+  if (tg) tg.textContent = '▲';
+
+  _send(modeConf.sendEvent, { mode: _inputMode, input: input });
+};
+
+// ── Follow-up (Triage only) ─────────────────────────────────────────────────
+window.iiFollowUp = function() {
+  if (!_lastReport) return;
+  var fb = document.getElementById('followup-btn');
+  if (fb) fb.disabled = true;
+  document.getElementById('followup-status').textContent = 'Generating code suggestions…';
+
+  var out = document.getElementById('output');
+  if (out) {
+    out.textContent += '\n\n' + Array(65).join('─') + '\n CODE CHANGE SUGGESTIONS\n' + Array(65).join('─') + '\n';
+    _applyTheme();
+  }
+  _send('triage_followup', { triage_report: _lastReport, mode: _lastMode, input: _lastInput });
+};
+
+// ── Save .md ────────────────────────────────────────────────────────────────
+window.iiSave = function() {
+  if (!_lastReport) return;
+  var fname = 'incident-' + _lastAnalysis + '-' + _lastMode + '-' + new Date().toISOString().slice(0, 10) + '.md';
+  var blob  = new Blob([_lastReport], { type: 'text/markdown;charset=utf-8' });
+  var url   = URL.createObjectURL(blob);
+  var a     = document.createElement('a');
+  a.href = url; a.download = fname;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+};
+
+// ── Thinking panel toggle ───────────────────────────────────────────────────
+window.iiToggleThinking = function() {
+  var panel = document.getElementById('thinking-panel');
+  var btn   = document.getElementById('thinking-toggle');
+  if (!panel) return;
+  var open = panel.classList.toggle('open');
+  if (btn) btn.textContent = open ? '▲' : '▼';
+};
+
+// ── Boot ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function() {
+  _token = _loadToken();
+  if (_token) {
+    document.getElementById('token-gate').classList.add('hidden');
+    _connect();
+  }
+  // Pre-fill token input if available from URL hash (dev convenience)
+  var hash = window.location.hash.replace('#token=', '');
+  if (hash && !_token) {
+    document.getElementById('token-input').value = hash;
+  }
+});
+
+})();
+</script>
+</body>
+</html>
