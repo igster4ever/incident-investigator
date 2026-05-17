@@ -1,0 +1,85 @@
+# Incident Investigator — Claude Context
+
+## What this is
+
+Standalone single-file SPA (`index.html`) for structured incident analysis. No build step —
+open directly in a browser. Analysis is delegated to the GPS·ADR Radar bridge server
+(port 7432) via WebSocket. The bridge must be running; the app is inoperable without it.
+
+## Module map
+
+| Path | Role |
+|------|------|
+| `index.html` | Self-contained SPA — all modes, all input types, token gate, themes |
+| `ii_bridge/prompts.py` | Pure prompt builder functions — no I/O, fully unit-testable |
+| `ii_bridge/handlers.py` | WS handlers — data gathering + streaming to Claude API |
+| `ii_bridge/__init__.py` | Exports `HANDLERS` dict |
+| `tests/conftest.py` | Mock WS fixture + sys.path wiring |
+| `tests/test_prompts.py` | Prompt builder unit tests |
+| `tests/test_handlers.py` | Handler flow tests (mock WS) |
+| `docs/architecture.md` | System diagram, WS event protocol, module ownership |
+| `docs/design-spikes.md` | Key design decisions with rationale |
+| `docs/execution-plan.md` | Phased delivery plan — current phase and backlog |
+
+The bridge shim lives **outside this repo**:
+`squad-gps-radar/scripts/bridge_modules/incident_handlers.py` — routes incoming WS events
+to `ii_bridge/handlers.py`. Registered in `bridge_modules/__init__.py`.
+
+## Running
+
+```bash
+# No install needed — open the SPA
+open index.html
+
+# Bridge must already be running (from the squad-gps-radar project)
+# python scripts/bridge_server.py
+
+# Tests
+pytest
+```
+
+## Key gotchas
+
+**Package name is `ii_bridge/`, not `bridge/`** — avoids a namespace collision with
+the GPS dashboard's `bridge` module on `sys.path`. Do not rename it.
+
+**`bridge_modules` imports are deferred inside handler functions** — never at module
+level. This breaks the circular import: `bridge_modules/__init__` → `incident_handlers`
+→ `ii_bridge`. Python's module cache means there is no runtime cost.
+
+**`prompts.py` must stay pure** — no I/O, no imports from `bridge_modules`. All data
+gathering happens in `handlers.py` before the prompt builder is called.
+
+**WS event naming convention** — progress and complete events are prefixed by mode:
+`fix_advisor_progress` / `fix_advisor_complete`, `minimal_fix_progress` / `minimal_fix_complete`,
+`perf_advisor_progress` / `perf_advisor_complete`. Status messages use the generic
+`{"type": "status", "text": "..."}` shape.
+
+**Triage / RCA handler is not in this repo** — it lives in
+`squad-gps-radar/scripts/bridge_modules/triage_handlers.py`. Data-gathering helpers
+(`_git_log_for_keyword`, etc.) are imported from there rather than duplicated.
+
+## Analysis modes
+
+| Mode | Bridge event | Intent |
+|------|-------------|--------|
+| Triage / RCA | `triage_report` | Timeline, root cause, remediation (existing handler, not here) |
+| Fix Advisor | `fix_advisor_report` | Repo ID, high-level fix, effort/risk |
+| Minimal Fix | `minimal_fix_report` | Smallest safe change, effort, tech debt callout |
+| Performance Advisor | `perf_advisor_report` | Bottleneck ID, root cause, resolution (Phase 3 — not yet built) |
+
+## Input types (all modes)
+
+`clickup` · `slack_thread` · `description` · `stacktrace`
+
+Performance Advisor's `description` input also accepts a file path (`src/Foo.java#method`),
+a git commit hash, or a raw code block — auto-fetched via `ii_bridge/fetcher.py` (Phase 3).
+
+## Adding a new mode
+
+1. Add prompt builder functions to `ii_bridge/prompts.py` — pure, one function per input type
+2. Add a handler to `ii_bridge/handlers.py` — data gathering + prompt call + stream
+3. Export the new handler key from `ii_bridge/__init__.py` in `HANDLERS`
+4. Add the mode to the bridge shim's dispatch in `bridge_modules/incident_handlers.py`
+5. Wire up the new mode in `index.html`
+6. Add tests to `tests/test_prompts.py` and `tests/test_handlers.py`

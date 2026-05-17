@@ -39,7 +39,78 @@
 
 ---
 
-## Phase 3 — Prompt quality + confidence display (Session 3)
+## Phase 3 — Performance Advisor (Session 3)
+
+**Goal:** Add a 4th analysis mode — Performance Advisor — enabling engineers to identify,
+understand, and resolve performance bottlenecks from a stacktrace, code block, file+method
+reference, git commit, or ClickUp ticket.
+
+### New files
+- [ ] `ii_bridge/fetcher.py` — auto-fetch utility: `fetch_file_method` + `fetch_commit_diff`
+  (uses same known repo list as triage handlers; pure functions, no WS I/O)
+
+### `ii_bridge/prompts.py` additions
+- [ ] `_perf_depth_instructions(depth)` — private helper returning the format/depth block
+  for `"quick"` | `"standard"` | `"full"`
+- [ ] `perf_advisor_clickup_prompt(ticket_data, depth)`
+- [ ] `perf_advisor_slack_prompt(thread_content, depth)`
+- [ ] `perf_advisor_description_prompt(content, content_source, depth)`
+  — `content_source` is one of: `"code_block"`, `"file_method:<path>#<method>"`,
+    `"commit_diff:<hash>"`, `"free_text"`
+- [ ] `perf_advisor_stacktrace_prompt(stacktrace, depth)`
+
+### `ii_bridge/handlers.py` additions
+- [ ] `performance_advisor_report` WS handler
+  — detects content type from raw description input (commit hash regex, file path
+    heuristic, multi-line code block, free text)
+  — calls `fetcher.fetch_file_method` or `fetcher.fetch_commit_diff` as appropriate
+  — on fetch failure emits `{"type": "fetch_required", "reason": "...", "message": "..."}`
+    before returning (UI shows inline warning; user pastes and resubmits)
+  — calls the appropriate prompt builder, streams report back
+
+### `index.html` changes
+- [ ] Add "Performance Advisor" as 4th option in the intent selector
+- [ ] Add depth selector within Performance Advisor mode:
+  — "Quick scan" (~1–2k tokens) / "Full report" (~2–4k tokens) / "Deep dive" (~4–8k tokens)
+- [ ] Contextual placeholder + ℹ tooltip on Description input when mode = Performance Advisor:
+  — placeholder: `Paste a code block  —OR—  enter a file path (e.g. src/Foo.java#myMethod)  —OR—  enter a git commit hash`
+  — tooltip: worked examples for each input variant
+- [ ] Handle `fetch_required` WS event: inline warning below Description input, input stays
+  active for paste fallback
+
+### Tests
+- [ ] `tests/test_prompts.py` additions — prompt builder unit tests for all 4 input types
+  × 3 depth levels (12 cases) + depth instructions helper
+- [ ] `tests/test_fetcher.py` — unit tests for `fetch_file_method` and `fetch_commit_diff`
+  (happy path + not-found + file-too-large + commit-not-found)
+- [ ] `tests/test_handlers.py` additions — handler flow tests: content-type detection,
+  fetch-success path, fetch-failure / `fetch_required` emission
+
+### Report structure
+Three depth tiers, user-selectable:
+
+| Tier | Bottlenecks | Root cause | Effort/Risk | Alternatives | Approx tokens |
+|------|-------------|------------|-------------|--------------|---------------|
+| Quick | Top 3, 1-sentence fix | 1 sentence | No | No | ~1–2k |
+| Standard | Top 5, 2–3 sentence fix | 2–3 sentences | Yes (badges) | No | ~2–4k |
+| Full | Exhaustive | Detailed | Yes (badges) | Yes + caveats | ~4–8k |
+
+All tiers end with `Confidence: N/10`.
+
+### Known limitations / future work
+- Method body extraction uses brace-walking regex — works for standard Java formatting;
+  may misbehave on lambdas or unusual indentation. Upgrade to `javalang` AST parser
+  in a later phase if extraction proves unreliable in practice.
+- Commit diff truncated at 200 lines — large refactor commits will be clipped.
+  Future: smart truncation (keep changed method bodies, drop boilerplate).
+
+**Exit criteria:** All four input types × all three depth tiers produce a streamed
+Performance Advisor report against real HKJC code. `fetch_required` fallback confirmed
+working for an unknown file path.
+
+---
+
+## Phase 4 — Prompt quality + confidence display (Session 4)
 
 **Goal:** Confidence score is surfaced visually; prompts tuned for HKJC monorepo specifics.
 
@@ -53,7 +124,7 @@
 
 ---
 
-## Phase 4 — History + multi-ticket (Future)
+## Phase 5 — History + multi-ticket (Future)
 
 **Goal:** Analyst can review prior investigations and compare across tickets.
 
