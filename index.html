@@ -89,6 +89,20 @@ html, body { height: 100%; background: #060e1a; color: #e2e8f0; font-family: -ap
 textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .input-hint { font-size: 9px; color: #334155; margin-top: 4px; }
 
+/* ── Depth selector (Perf Advisor) ── */
+#depth-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 14px; background: #060e1a;
+  border-bottom: 1px solid #1e293b; flex-shrink: 0;
+}
+.depth-btn {
+  padding: 2px 10px; background: #0f172a; border: 1px solid #1e293b;
+  color: #64748b; border-radius: 4px; font-size: 10px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: border-color .12s, color .12s, background .12s;
+}
+.depth-btn:hover { border-color: #334155; color: #94a3b8; }
+.depth-btn.active { border-color: #8b5cf6; color: #c4b5fd; background: #1e1040; }
+
 /* ── Theme strip ── */
 #theme-strip {
   display: flex; align-items: center; gap: 6px; padding: 6px 14px;
@@ -187,10 +201,19 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 
   <!-- ── Analysis mode selector ── -->
   <div id="mode-bar">
-    <button class="analysis-mode-btn active" data-analysis="triage"      onclick="iiSetAnalysis('triage')">&#9888;&#65039; Triage / RCA</button>
+    <button class="analysis-mode-btn active" data-analysis="triage"       onclick="iiSetAnalysis('triage')">&#9888;&#65039; Triage / RCA</button>
     <button class="analysis-mode-btn"        data-analysis="fix_advisor"  onclick="iiSetAnalysis('fix_advisor')">&#128295; Fix Advisor</button>
     <button class="analysis-mode-btn"        data-analysis="minimal_fix"  onclick="iiSetAnalysis('minimal_fix')">&#9889; Minimal Fix</button>
+    <button class="analysis-mode-btn"        data-analysis="perf_advisor" onclick="iiSetAnalysis('perf_advisor')">&#128200; Perf Advisor</button>
     <span id="mode-description">Full forensic analysis &mdash; timeline, root cause, remediation</span>
+  </div>
+
+  <!-- ── Depth selector (Performance Advisor only) ── -->
+  <div id="depth-bar" style="display:none">
+    <span style="font-size:11px;opacity:.6;margin-right:4px">Depth:</span>
+    <button class="depth-btn"        data-depth="quick"    onclick="iiSetDepth('quick')">&#9889; Quick scan</button>
+    <button class="depth-btn active" data-depth="standard" onclick="iiSetDepth('standard')">&#128196; Standard</button>
+    <button class="depth-btn"        data-depth="full"     onclick="iiSetDepth('full')">&#128269; Deep dive</button>
   </div>
 
   <!-- ── Input mode toolbar ── -->
@@ -221,6 +244,11 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
     <div id="input-description" style="display:none">
       <textarea id="val-description" class="text-input"
         placeholder="Describe the incident, bug or issue in your own words&#10;&#10;Include: symptoms, affected services, when it started, what changed recently..."></textarea>
+      <div id="desc-hint" class="input-hint" style="display:none">
+        Paste a code block &nbsp;&mdash;&nbsp; or enter a file path (e.g. <code>src/Foo.java#myMethod</code>) &nbsp;&mdash;&nbsp; or enter a git commit hash (7–40 hex chars).
+        File paths and commit hashes are auto-fetched from the known monorepo; if not found you&rsquo;ll be prompted to paste the content directly.
+      </div>
+      <div id="fetch-required-banner" class="input-hint" style="display:none;color:#f59e0b"></div>
     </div>
     <div id="input-stacktrace" style="display:none">
       <textarea id="val-stacktrace" class="text-input"
@@ -268,6 +296,9 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   │                                                                   │
   │  Minimal Fix    — smallest safe change, affected files, tech      │
   │                   debt explicitly called out                      │
+  │                                                                   │
+  │  Perf Advisor   — bottleneck ID, root cause, resolution           │
+  │                   Quick / Standard / Deep dive tiers              │
   └───────────────────────────────────────────────────────────────────┘
 </span></pre>
   </div>
@@ -301,8 +332,9 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 'use strict';
 
 // ── State ──────────────────────────────────────────────────────────────────
-var _analysis  = 'triage';          // triage | fix_advisor | minimal_fix
+var _analysis  = 'triage';          // triage | fix_advisor | minimal_fix | perf_advisor
 var _inputMode = 'clickup';
+var _depth     = 'standard';        // quick | standard | full (perf_advisor only)
 var _ws        = null;
 var _token     = null;
 var _lastReport   = '';
@@ -312,9 +344,10 @@ var _lastInput    = '';
 var _reconnectTimer = null;
 
 var _MODES = {
-  triage:      { label: 'Full forensic analysis — timeline, root cause, remediation', hasFollowup: true,  sendEvent: 'triage_report',      progressEvent: 'triage_progress',      completeEvent: 'triage_complete',      reportKey: 'report' },
-  fix_advisor: { label: 'Repo identification, proposed fix, effort estimate, risk level',  hasFollowup: false, sendEvent: 'fix_advisor_report',  progressEvent: 'fix_advisor_progress',  completeEvent: 'fix_advisor_complete',  reportKey: 'report' },
-  minimal_fix: { label: 'Smallest safe change, affected files, tech debt called out',      hasFollowup: false, sendEvent: 'minimal_fix_report',  progressEvent: 'minimal_fix_progress',  completeEvent: 'minimal_fix_complete',  reportKey: 'report' },
+  triage:       { label: 'Full forensic analysis — timeline, root cause, remediation',        hasFollowup: true,  sendEvent: 'triage_report',      progressEvent: 'triage_progress',       completeEvent: 'triage_complete',       reportKey: 'report' },
+  fix_advisor:  { label: 'Repo identification, proposed fix, effort estimate, risk level',    hasFollowup: false, sendEvent: 'fix_advisor_report', progressEvent: 'fix_advisor_progress',  completeEvent: 'fix_advisor_complete',  reportKey: 'report' },
+  minimal_fix:  { label: 'Smallest safe change, affected files, tech debt called out',        hasFollowup: false, sendEvent: 'minimal_fix_report', progressEvent: 'minimal_fix_progress',  completeEvent: 'minimal_fix_complete',  reportKey: 'report' },
+  perf_advisor: { label: 'Bottleneck identification, root cause, resolution — with depth tiers', hasFollowup: false, sendEvent: 'perf_advisor_report', progressEvent: 'perf_advisor_progress', completeEvent: 'perf_advisor_complete', reportKey: 'report' },
 };
 
 var _THEMES = {
@@ -399,7 +432,7 @@ function _send(type, payload) {
     _setStatus('⚠ Bridge not connected');
     return false;
   }
-  _ws.send(JSON.stringify(Object.assign({ type: type }, payload)));
+  _ws.send(JSON.stringify({ type: type, token: _token, payload: payload }));
   return true;
 }
 
@@ -452,6 +485,21 @@ function _dispatch(msg) {
   }
   if (type === 'minimal_fix_complete') {
     _onComplete(msg.report || '');
+    return;
+  }
+  if (type === 'perf_advisor_complete') {
+    _onComplete(msg.report || '');
+    return;
+  }
+
+  if (type === 'fetch_required') {
+    _enableGenBtn();
+    var banner = document.getElementById('fetch-required-banner');
+    if (banner) {
+      banner.textContent = '⚠ ' + (msg.message || 'Auto-fetch failed — paste the content directly into the Description box and Generate again.');
+      banner.style.display = '';
+    }
+    _setStatus('⚠ Fetch required — see hint below');
     return;
   }
 
@@ -526,10 +574,35 @@ window.iiSetAnalysis = function(mode) {
   var desc = document.getElementById('mode-description');
   if (desc && _MODES[mode]) desc.textContent = _MODES[mode].label;
 
+  // Show depth bar only for Performance Advisor
+  var depthBar = document.getElementById('depth-bar');
+  if (depthBar) depthBar.style.display = mode === 'perf_advisor' ? '' : 'none';
+
+  // Contextual Description placeholder and hint for Performance Advisor
+  var ta   = document.getElementById('val-description');
+  var hint = document.getElementById('desc-hint');
+  if (ta) {
+    ta.placeholder = mode === 'perf_advisor'
+      ? 'Paste a code block  —OR—  enter a file path (e.g. src/Foo.java#myMethod)  —OR—  enter a git commit hash (7–40 hex chars)'
+      : 'Describe the incident, bug or issue in your own words\n\nInclude: symptoms, affected services, when it started, what changed recently...';
+  }
+  if (hint) hint.style.display = (mode === 'perf_advisor' && _inputMode === 'description') ? '' : 'none';
+
+  // Clear any fetch-required banner on mode switch
+  var banner = document.getElementById('fetch-required-banner');
+  if (banner) { banner.textContent = ''; banner.style.display = 'none'; }
+
   // Show/hide followup button based on mode capability
   var fb = document.getElementById('followup-btn');
   if (fb && !_lastReport) fb.style.display = 'none';
   if (fb && _lastReport)  fb.style.display = (_MODES[mode] && _MODES[mode].hasFollowup) ? '' : 'none';
+};
+
+window.iiSetDepth = function(depth) {
+  _depth = depth;
+  document.querySelectorAll('.depth-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.depth === depth);
+  });
 };
 
 // ── Input mode switching ────────────────────────────────────────────────────
@@ -542,6 +615,12 @@ window.iiSetInputMode = function(mode) {
     var el = document.getElementById('input-' + m);
     if (el) el.style.display = m === mode ? '' : 'none';
   });
+  // Show perf description hint only when both mode and input type match
+  var hint = document.getElementById('desc-hint');
+  if (hint) hint.style.display = (_analysis === 'perf_advisor' && mode === 'description') ? '' : 'none';
+  // Clear fetch-required banner on input mode switch
+  var banner = document.getElementById('fetch-required-banner');
+  if (banner) { banner.textContent = ''; banner.style.display = 'none'; }
 };
 
 // ── Theme ───────────────────────────────────────────────────────────────────
@@ -600,7 +679,9 @@ window.iiGenerate = function() {
   if (tt) tt.textContent = '';
   if (tg) tg.textContent = '▲';
 
-  _send(modeConf.sendEvent, { mode: _inputMode, input: input });
+  var payload = { mode: _inputMode, input: input };
+  if (_analysis === 'perf_advisor') payload.depth = _depth;
+  _send(modeConf.sendEvent, payload);
 };
 
 // ── Follow-up (Triage only) ─────────────────────────────────────────────────

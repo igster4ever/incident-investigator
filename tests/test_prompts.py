@@ -15,6 +15,11 @@ from ii_bridge.prompts import (
     minimal_fix_slack_thread,
     minimal_fix_description,
     minimal_fix_stacktrace,
+    _perf_depth_instructions,
+    perf_advisor_clickup_prompt,
+    perf_advisor_slack_prompt,
+    perf_advisor_description_prompt,
+    perf_advisor_stacktrace_prompt,
 )
 
 
@@ -224,3 +229,146 @@ class TestPromptDifferentiation:
     def test_minimal_fix_mentions_tech_debt_left_behind(self):
         prompt = minimal_fix_clickup("X-1", "", "")
         assert "Tech Debt Left Behind" in prompt
+
+
+# ── Performance Advisor — depth helper ───────────────────────────────────────
+
+class TestPerfDepthInstructions:
+    def test_quick_mentions_top_3(self):
+        out = _perf_depth_instructions("quick")
+        assert "3" in out
+
+    def test_standard_mentions_top_5(self):
+        out = _perf_depth_instructions("standard")
+        assert "5" in out
+
+    def test_full_mentions_alternatives(self):
+        out = _perf_depth_instructions("full")
+        assert "Alternatives" in out
+
+    def test_all_tiers_contain_confidence(self):
+        for depth in ("quick", "standard", "full"):
+            assert "Confidence" in _perf_depth_instructions(depth), f"Missing Confidence for {depth}"
+
+    def test_unknown_depth_falls_back_to_standard(self):
+        out = _perf_depth_instructions("garbage")
+        assert "Standard Report" in out
+
+    def test_quick_framing(self):
+        assert "Quick Scan" in _perf_depth_instructions("quick")
+
+    def test_full_framing(self):
+        assert "Deep Dive" in _perf_depth_instructions("full")
+
+
+# ── Performance Advisor — clickup ─────────────────────────────────────────────
+
+class TestPerfAdvisorClickup:
+    _DEPTHS = ("quick", "standard", "full")
+
+    def test_contains_ticket_id_all_depths(self):
+        for depth in self._DEPTHS:
+            prompt = perf_advisor_clickup_prompt("AOP-5678", "", "", depth)
+            assert "AOP-5678" in prompt, f"Missing ticket in {depth}"
+
+    def test_slack_fallback_all_depths(self):
+        for depth in self._DEPTHS:
+            prompt = perf_advisor_clickup_prompt("AOP-5678", "", "", depth)
+            assert "no Slack mentions found" in prompt
+
+    def test_slack_included_when_present(self):
+        prompt = perf_advisor_clickup_prompt("AOP-5678", "slow query log here", "", "standard")
+        assert "slow query log here" in prompt
+
+    def test_depth_instruction_varies(self):
+        quick    = perf_advisor_clickup_prompt("AOP-1", "", "", "quick")
+        standard = perf_advisor_clickup_prompt("AOP-1", "", "", "standard")
+        full     = perf_advisor_clickup_prompt("AOP-1", "", "", "full")
+        assert quick != standard != full
+
+
+# ── Performance Advisor — slack thread ───────────────────────────────────────
+
+class TestPerfAdvisorSlack:
+    def test_contains_thread_text(self):
+        prompt = perf_advisor_slack_prompt("thread content here", "standard")
+        assert "thread content here" in prompt
+
+    def test_quick_depth(self):
+        prompt = perf_advisor_slack_prompt("thread", "quick")
+        assert "Quick Scan" in prompt
+
+    def test_full_depth(self):
+        prompt = perf_advisor_slack_prompt("thread", "full")
+        assert "Deep Dive" in prompt
+
+    def test_standard_depth(self):
+        prompt = perf_advisor_slack_prompt("thread", "standard")
+        assert "Standard Report" in prompt
+
+
+# ── Performance Advisor — description ────────────────────────────────────────
+
+class TestPerfAdvisorDescription:
+    def test_contains_content(self):
+        prompt = perf_advisor_description_prompt("public void slow() {}", "code_block", "standard")
+        assert "public void slow()" in prompt
+
+    def test_code_block_source_label(self):
+        prompt = perf_advisor_description_prompt("code", "code_block", "quick")
+        assert "Code block" in prompt
+
+    def test_free_text_source_label(self):
+        prompt = perf_advisor_description_prompt("some description", "free_text", "quick")
+        assert "Free-text" in prompt
+
+    def test_file_method_source_preserved(self):
+        prompt = perf_advisor_description_prompt("body", "file_method:src/Foo.java#doThing", "standard")
+        assert "file_method" in prompt or "Foo.java" in prompt or "src" in prompt
+
+    def test_all_depths_include_confidence(self):
+        for depth in ("quick", "standard", "full"):
+            prompt = perf_advisor_description_prompt("content", "free_text", depth)
+            assert "Confidence" in prompt
+
+
+# ── Performance Advisor — stacktrace ─────────────────────────────────────────
+
+class TestPerfAdvisorStacktrace:
+    _parsed = {
+        "primary_exception": {"type": "StackOverflowError", "message": "recursive call"},
+        "affected_services": ["ats-pricing"],
+        "all_project_frames": [
+            {"class_method": "OddsCalculator.compute", "line": 10, "likely_paths": []},
+        ],
+    }
+
+    def test_contains_exception_type(self):
+        prompt = perf_advisor_stacktrace_prompt("trace...", self._parsed, "", "", "standard")
+        assert "StackOverflowError" in prompt
+
+    def test_contains_service(self):
+        prompt = perf_advisor_stacktrace_prompt("trace...", self._parsed, "", "", "standard")
+        assert "ats-pricing" in prompt
+
+    def test_contains_frame(self):
+        prompt = perf_advisor_stacktrace_prompt("trace...", self._parsed, "", "", "standard")
+        assert "OddsCalculator.compute" in prompt
+
+    def test_quick_depth(self):
+        prompt = perf_advisor_stacktrace_prompt("trace...", self._parsed, "", "", "quick")
+        assert "Quick Scan" in prompt
+
+    def test_full_depth_has_alternatives(self):
+        prompt = perf_advisor_stacktrace_prompt("trace...", self._parsed, "", "", "full")
+        assert "Alternatives" in prompt
+
+    def test_stacktrace_truncated_to_40_lines(self):
+        long_trace = "\n".join(f"line {i}" for i in range(100))
+        prompt = perf_advisor_stacktrace_prompt(long_trace, {}, "", "", "standard")
+        assert "line 39" in prompt
+        assert "line 40" not in prompt
+
+    def test_empty_parsed_does_not_raise(self):
+        prompt = perf_advisor_stacktrace_prompt("trace...", {}, "", "", "standard")
+        assert "Unknown" in prompt

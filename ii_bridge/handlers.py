@@ -34,7 +34,12 @@ from ii_bridge.prompts import (
     minimal_fix_slack_thread,
     minimal_fix_description,
     minimal_fix_stacktrace,
+    perf_advisor_clickup_prompt,
+    perf_advisor_slack_prompt,
+    perf_advisor_description_prompt,
+    perf_advisor_stacktrace_prompt,
 )
+from ii_bridge.fetcher import ContentType, FetchError, detect_content_type, fetch_file_method, fetch_commit_diff
 
 
 # ── Shared data-gathering pipeline ───────────────────────────────────────────
@@ -213,7 +218,89 @@ async def _handle_minimal_fix(ws, payload: dict) -> None:
     )
 
 
+async def _handle_perf_advisor(ws, payload: dict) -> None:
+    from bridge_modules.shared import _stream_claude_to_ws, _read_slack_token
+    from bridge_modules.triage_handlers import _REPO_PATH
+
+    mode      = (payload.get("mode")  or "description").strip()
+    input_val = (payload.get("input") or "").strip()
+    depth     = (payload.get("depth") or "standard").strip()
+
+    if not input_val:
+        await ws.send(json.dumps({"type": "error", "message": "No input provided"}))
+        return
+
+    token     = _read_slack_token()
+    repo_roots = [str(_REPO_PATH)]
+    prompt    = ""
+
+    try:
+        if mode == "clickup":
+            slack_text, git_text = await _gather_clickup(ws, input_val.upper(), token)
+            prompt = perf_advisor_clickup_prompt(input_val.upper(), slack_text, git_text, depth)
+
+        elif mode == "slack_thread":
+            thread_text = await _gather_slack_thread(ws, input_val, token)
+            prompt = perf_advisor_slack_prompt(thread_text, depth)
+
+        elif mode == "stacktrace":
+            parsed, code_ctx, git_ctx = await _gather_stacktrace(ws, input_val)
+            prompt = perf_advisor_stacktrace_prompt(input_val, parsed, code_ctx, git_ctx, depth)
+
+        else:
+            # description — detect content type and auto-fetch if needed
+            content_type = detect_content_type(input_val)
+
+            if content_type == ContentType.COMMIT_HASH:
+                await ws.send(json.dumps({"type": "status", "text": "Fetching commit diff…"}))
+                try:
+                    content = fetch_commit_diff(input_val, repo_roots)
+                    content_source = f"commit_diff:{input_val}"
+                except FetchError as exc:
+                    await ws.send(json.dumps({
+                        "type": "fetch_required",
+                        "reason": "commit_not_found",
+                        "message": str(exc),
+                    }))
+                    return
+
+            elif content_type == ContentType.FILE_METHOD:
+                await ws.send(json.dumps({"type": "status", "text": "Fetching file/method…"}))
+                parts      = input_val.split("#", 1)
+                file_path  = parts[0]
+                method     = parts[1] if len(parts) > 1 else None
+                try:
+                    content = fetch_file_method(file_path, method, repo_roots)
+                    content_source = f"file_method:{input_val}"
+                except FetchError as exc:
+                    await ws.send(json.dumps({
+                        "type": "fetch_required",
+                        "reason": "file_not_found",
+                        "message": str(exc),
+                    }))
+                    return
+
+            elif content_type == ContentType.CODE_BLOCK:
+                content        = input_val
+                content_source = "code_block"
+
+            else:
+                content        = input_val
+                content_source = "free_text"
+
+            prompt = perf_advisor_description_prompt(content, content_source, depth)
+
+    except Exception as exc:
+        await ws.send(json.dumps({"type": "error", "message": f"Data gathering failed: {exc}"}))
+        return
+
+    await ws.send(json.dumps({"type": "status", "text": "Analysing with Claude…"}))
+    report = await _stream_claude_to_ws(ws, prompt, progress_event="perf_advisor_progress")
+    await ws.send(json.dumps({"type": "perf_advisor_complete", "report": report}))
+
+
 HANDLERS = {
-    "fix_advisor_report": _handle_fix_advisor,
-    "minimal_fix_report": _handle_minimal_fix,
+    "fix_advisor_report":        _handle_fix_advisor,
+    "minimal_fix_report":        _handle_minimal_fix,
+    "perf_advisor_report":       _handle_perf_advisor,
 }

@@ -110,6 +110,49 @@ working for an unknown file path.
 
 ---
 
+## Phase 3.5 — PNG Stack Trace Input (Session 4 or 5)
+
+**Goal:** Accept a screenshot of a Java stack trace (PNG/JPEG) as an alternative to pasting text.
+Vision extraction runs via Claude; extracted text populates the stacktrace textarea for user review before analysis.
+
+### Pipeline
+Upload/paste image → client-side Canvas resize (max 1 400px, JPEG 0.88) → WS `extract_stacktrace_image`
+→ Claude vision extraction → `stacktrace_extracted` → textarea populated → normal analysis flow.
+
+### New files
+- [ ] `ii_bridge/image_extractor.py` — `extract_stacktrace_from_image(image_b64, media_type) -> str`;
+  raises `ExtractionError`. Pure function, no WS I/O.
+
+### `ii_bridge/handlers.py` additions
+- [ ] `extract_stacktrace_image` handler — call extractor, emit `stacktrace_extracted { text }`
+  or `stacktrace_extract_failed { reason }` on `ExtractionError` / `NOT_A_STACKTRACE` response
+
+### `ii_bridge/__init__.py` + bridge shim
+- [ ] Export `extract_stacktrace_image` handler; register in `bridge_modules/incident_handlers.py`
+
+### Tests
+- [ ] `tests/test_image_extractor.py` — happy path, `ExtractionError`, `NOT_A_STACKTRACE` response
+- [ ] `tests/test_handlers.py` additions — handler happy/fail paths (mock extractor)
+
+### `index.html` changes
+- [ ] File input (`accept="image/*"`) + `Cmd/Ctrl+V` clipboard paste detection in stacktrace panel
+- [ ] Client-side Canvas resize pipeline: max 1 400px longest side → JPEG 0.88; retry at 0.72 if >1 MB;
+  reject if source < 100px on either dimension
+- [ ] Image thumbnail (max 120×60px) + × clear button shown after upload
+- [ ] Extraction status: `"Extracting stack trace from image…"` while in-flight
+- [ ] Handle `stacktrace_extracted` (populate textarea) and `stacktrace_extract_failed` (inline error)
+
+### Claude extraction prompt
+> "You are extracting text from a screenshot of a Java stack trace. Return only the raw stack trace
+> exactly as shown — preserve all package names, class names, method names, line numbers, and exception
+> messages verbatim. Do not summarise, annotate, or add commentary. If the image does not contain a
+> stack trace, respond with exactly: NOT_A_STACKTRACE"
+
+**Exit criteria:** Upload a PNG screenshot of a real HKJC stack trace → extracted text appears in
+textarea → Fix Advisor / Minimal Fix produces a valid report from it.
+
+---
+
 ## Phase 4 — Prompt quality + confidence display (Session 4)
 
 **Goal:** Confidence score is surfaced visually; prompts tuned for HKJC monorepo specifics.

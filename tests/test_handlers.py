@@ -14,7 +14,7 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ii_bridge.handlers import _handle_fix_advisor, _handle_minimal_fix, HANDLERS
+from ii_bridge.handlers import _handle_fix_advisor, _handle_minimal_fix, _handle_perf_advisor, HANDLERS
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -161,6 +161,123 @@ class TestMinimalFixHandler:
         assert mock_ws.last_of_type("fix_advisor_complete") is None
 
 
+# ── Performance Advisor ───────────────────────────────────────────────────────
+
+def _make_repo_path_patch():
+    from pathlib import Path
+    return patch(
+        "bridge_modules.triage_handlers._REPO_PATH",
+        new=Path("/fake/repo"),
+    )
+
+
+class TestPerfAdvisorHandler:
+
+    @pytest.mark.asyncio
+    async def test_empty_input_sends_error(self, mock_ws):
+        await _handle_perf_advisor(mock_ws, {"mode": "description", "input": ""})
+        errors = mock_ws.messages_of_type("error")
+        assert errors
+        assert "No input provided" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_clickup_mode_emits_complete(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch("perf report"), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "clickup", "input": "AOP-7777", "depth": "standard"})
+
+        complete = mock_ws.last_of_type("perf_advisor_complete")
+        assert complete is not None
+        assert complete["report"] == "perf report"
+
+    @pytest.mark.asyncio
+    async def test_slack_thread_mode_emits_complete(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch(), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {
+                "mode": "slack_thread",
+                "input": "https://amelco.slack.com/archives/C123/p111",
+                "depth": "quick",
+            })
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+    @pytest.mark.asyncio
+    async def test_stacktrace_mode_emits_complete(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(return_value={}), _make_stream_patch(), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "stacktrace", "input": "NPE at X", "depth": "full"})
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+    @pytest.mark.asyncio
+    async def test_description_free_text_emits_complete(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch("result"), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "the service is slow", "depth": "quick"})
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+    @pytest.mark.asyncio
+    async def test_description_commit_hash_fetches_diff(self, mock_ws):
+        with (
+            _make_no_token_patch(),
+            _make_repo_path_patch(),
+            _make_stream_patch("result"),
+            patch("ii_bridge.handlers.fetch_commit_diff", return_value="diff content"),
+        ):
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "abc1234", "depth": "standard"})
+
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+    @pytest.mark.asyncio
+    async def test_description_commit_fetch_failure_emits_fetch_required(self, mock_ws):
+        from ii_bridge.fetcher import FetchError
+        with (
+            _make_no_token_patch(),
+            _make_repo_path_patch(),
+            patch("ii_bridge.handlers.fetch_commit_diff", side_effect=FetchError("not found")),
+        ):
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "abc1234", "depth": "quick"})
+
+        fetch_req = mock_ws.last_of_type("fetch_required")
+        assert fetch_req is not None
+        assert fetch_req["reason"] == "commit_not_found"
+
+    @pytest.mark.asyncio
+    async def test_description_file_path_emits_fetch_required_on_error(self, mock_ws):
+        from ii_bridge.fetcher import FetchError
+        with (
+            _make_no_token_patch(),
+            _make_repo_path_patch(),
+            patch("ii_bridge.handlers.fetch_file_method", side_effect=FetchError("missing")),
+        ):
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "src/Foo.java#doThing", "depth": "standard"})
+
+        fetch_req = mock_ws.last_of_type("fetch_required")
+        assert fetch_req is not None
+        assert fetch_req["reason"] == "file_not_found"
+
+    @pytest.mark.asyncio
+    async def test_description_file_path_success_emits_complete(self, mock_ws):
+        with (
+            _make_no_token_patch(),
+            _make_repo_path_patch(),
+            _make_stream_patch("perf result"),
+            patch("ii_bridge.handlers.fetch_file_method", return_value="method body here"),
+        ):
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "src/Foo.java#doThing", "depth": "full"})
+
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+    @pytest.mark.asyncio
+    async def test_does_not_emit_fix_advisor_events(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch(), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "clickup", "input": "AOP-1", "depth": "quick"})
+
+        assert mock_ws.last_of_type("fix_advisor_complete") is None
+        assert mock_ws.last_of_type("minimal_fix_complete") is None
+
+    @pytest.mark.asyncio
+    async def test_depth_defaults_to_standard(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch(), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "slow service"})
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+
 # ── HANDLERS dict ─────────────────────────────────────────────────────────────
 
 class TestHandlersDict:
@@ -170,6 +287,10 @@ class TestHandlersDict:
     def test_minimal_fix_registered(self):
         assert "minimal_fix_report" in HANDLERS
 
+    def test_perf_advisor_registered(self):
+        assert "perf_advisor_report" in HANDLERS
+
     def test_handlers_are_callable(self):
         assert callable(HANDLERS["fix_advisor_report"])
         assert callable(HANDLERS["minimal_fix_report"])
+        assert callable(HANDLERS["perf_advisor_report"])

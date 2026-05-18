@@ -59,6 +59,17 @@ gathering happens in `handlers.py` before the prompt builder is called.
 `squad-gps-radar/scripts/bridge_modules/triage_handlers.py`. Data-gathering helpers
 (`_git_log_for_keyword`, etc.) are imported from there rather than duplicated.
 
+**WS message format is `{ type, token, payload }`** — the bridge validates `token` in
+every message body (not just the WS connection URL). Handler data must be nested under
+`payload`; the bridge does `payload = msg.get("payload", {})` before calling the handler.
+Missing either causes a silent `{"type": "error", "message": "Unauthorised"}` response.
+The `_send` function in `index.html` handles this — do not flatten payload into the
+top-level message object.
+
+**Bridge `state.json` token can be stale** — if the bridge was restarted, `~/.cache/claude-bridge/state.json`
+may hold a different token than the running process. When auth fails, verify with
+`ps aux | grep bridge` to get the live token from the process args.
+
 ## Analysis modes
 
 | Mode | Bridge event | Intent |
