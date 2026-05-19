@@ -234,7 +234,14 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
     <div id="input-clickup">
       <input id="val-clickup" type="text" class="text-input" style="max-width:400px"
         placeholder="Ticket ID &mdash; e.g. AOP-6518, DEV-63860">
-      <div class="input-hint">Searches Slack for mentions &middot; runs git log with ticket reference &middot; synthesises analysis</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+        <div class="input-hint" style="margin-top:0">Fetches ClickUp description &middot; runs git log &middot; synthesises analysis</div>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="slack-toggle" checked onchange="iiToggleSlack(this.checked)"
+            style="accent-color:currentColor;cursor:pointer">
+          Search Slack
+        </label>
+      </div>
     </div>
     <div id="input-slack_thread" style="display:none">
       <input id="val-slack_thread" type="text" class="text-input" style="max-width:600px"
@@ -342,9 +349,10 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 'use strict';
 
 // ── State ──────────────────────────────────────────────────────────────────
-var _analysis  = 'triage';          // triage | fix_advisor | minimal_fix | perf_advisor
-var _inputMode = 'clickup';
-var _depth     = 'standard';        // quick | standard | full (perf_advisor only)
+var _analysis     = 'triage';          // triage | fix_advisor | minimal_fix | perf_advisor
+var _inputMode    = 'clickup';
+var _depth        = 'standard';        // quick | standard | full (perf_advisor only)
+var _slackEnabled = true;
 var _ws        = null;
 var _token     = null;
 var _lastReport   = '';
@@ -624,6 +632,10 @@ window.iiSetAnalysis = function(mode) {
   if (fb && _lastReport)  fb.style.display = (_MODES[mode] && _MODES[mode].hasFollowup) ? '' : 'none';
 };
 
+window.iiToggleSlack = function(enabled) {
+  _slackEnabled = !!enabled;
+};
+
 window.iiSetDepth = function(depth) {
   _depth = depth;
   document.querySelectorAll('.depth-btn').forEach(function(b) {
@@ -707,6 +719,7 @@ window.iiGenerate = function() {
 
   var payload = { mode: _inputMode, input: input };
   if (_analysis === 'perf_advisor') payload.depth = _depth;
+  if (_inputMode === 'clickup') payload.slack_enabled = _slackEnabled;
   _send(modeConf.sendEvent, payload);
 };
 

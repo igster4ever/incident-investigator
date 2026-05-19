@@ -46,27 +46,50 @@ from ii_bridge.prompts import (
     perf_advisor_stacktrace_prompt,
 )
 from ii_bridge.fetcher import ContentType, FetchError, detect_content_type, fetch_file_method, fetch_commit_diff
+from ii_bridge.clickup_fetcher import fetch_clickup_task
 
 
 # ── Shared data-gathering pipeline ───────────────────────────────────────────
 
-async def _gather_clickup(ws, ticket_id: str, token: str | None) -> tuple[str, str]:
+async def _gather_clickup(
+    ws,
+    ticket_id: str,
+    token: str | None,
+    *,
+    slack_enabled: bool = True,
+) -> tuple[str, str, str]:
+    """Returns (task_content, slack_text, git_text). Any source may be empty on failure."""
     from bridge_modules.shared import _run_in_executor
     from bridge_modules.triage_handlers import _git_log_for_keyword
-    from bridge_slack import _slack_search_channels
 
+    # ── ClickUp task content ────────────────────────────────────────────────
+    await ws.send(json.dumps({"type": "status", "text": f"Fetching ClickUp task {ticket_id}…"}))
+    task_content = await _run_in_executor(fetch_clickup_task, ticket_id) or ""
+    if not task_content:
+        await ws.send(json.dumps({"type": "status", "text": f"No ClickUp content for {ticket_id} — continuing with Slack + git"}))
+
+    # ── Slack search (optional, degrades gracefully) ────────────────────────
     slack_text = ""
-    if token:
-        await ws.send(json.dumps({"type": "status", "text": f"Searching Slack for {ticket_id}…"}))
-        results = await _run_in_executor(_slack_search_channels, token, ticket_id)
-        if results:
-            slack_text = "\n".join(
-                f"[{r.get('channel','?')}] {r.get('text','')[:200]}"
-                for r in results[:10]
-            )
+    if slack_enabled and token:
+        from bridge_slack import _slack_search_channels
+        try:
+            await ws.send(json.dumps({"type": "status", "text": f"Searching Slack for {ticket_id}…"}))
+            results = await _run_in_executor(_slack_search_channels, token, ticket_id)
+            if results:
+                slack_text = "\n".join(
+                    f"[{r.get('channel','?')}] {r.get('text','')[:200]}"
+                    for r in results[:10]
+                )
+        except Exception:
+            await ws.send(json.dumps({"type": "status", "text": "Slack search failed — continuing without it"}))
+    elif not slack_enabled:
+        await ws.send(json.dumps({"type": "status", "text": "Slack search skipped (disabled)"}))
+
+    # ── Git log ─────────────────────────────────────────────────────────────
     await ws.send(json.dumps({"type": "status", "text": f"Running git log for {ticket_id}…"}))
     git_text = await _run_in_executor(_git_log_for_keyword, ticket_id)
-    return slack_text, git_text
+
+    return task_content, slack_text, git_text
 
 
 async def _gather_slack_thread(ws, url: str, token: str | None) -> str:
@@ -159,13 +182,16 @@ async def _handle_incident_mode(
         await ws.send(json.dumps({"type": "error", "message": "No input provided"}))
         return
 
-    token  = _read_slack_token()
+    token        = _read_slack_token()
+    slack_enabled = bool(payload.get("slack_enabled", True))
     prompt = ""
 
     try:
         if mode == "clickup":
-            slack_text, git_text = await _gather_clickup(ws, input_val.upper(), token)
-            prompt = prompt_fns["clickup"](input_val.upper(), slack_text, git_text)
+            task_content, slack_text, git_text = await _gather_clickup(
+                ws, input_val.upper(), token, slack_enabled=slack_enabled
+            )
+            prompt = prompt_fns["clickup"](input_val.upper(), slack_text, git_text, task_content)
 
         elif mode == "slack_thread":
             thread_text = await _gather_slack_thread(ws, input_val, token)
@@ -236,14 +262,17 @@ async def _handle_perf_advisor(ws, payload: dict) -> None:
         await ws.send(json.dumps({"type": "error", "message": "No input provided"}))
         return
 
-    token     = _read_slack_token()
-    repo_roots = [str(_REPO_PATH)]
-    prompt    = ""
+    token         = _read_slack_token()
+    slack_enabled = bool(payload.get("slack_enabled", True))
+    repo_roots    = [str(_REPO_PATH)]
+    prompt        = ""
 
     try:
         if mode == "clickup":
-            slack_text, git_text = await _gather_clickup(ws, input_val.upper(), token)
-            prompt = perf_advisor_clickup_prompt(input_val.upper(), slack_text, git_text, depth)
+            task_content, slack_text, git_text = await _gather_clickup(
+                ws, input_val.upper(), token, slack_enabled=slack_enabled
+            )
+            prompt = perf_advisor_clickup_prompt(input_val.upper(), slack_text, git_text, depth, task_content)
 
         elif mode == "slack_thread":
             thread_text = await _gather_slack_thread(ws, input_val, token)

@@ -10,6 +10,14 @@ Risk scale:    Low  |  Medium  |  High  |  Critical
 
 from __future__ import annotations
 
+# Prepended to every prompt — prevents Claude from reaching for tools when the
+# subprocess MCP config makes them visible but permission-mode blocks them.
+_NO_TOOLS_PREAMBLE = (
+    "Important: you are running in a restricted context with no tool access. "
+    "Work only with the information provided in this prompt — do not attempt to "
+    "call any tools, fetch URLs, read files, or query external systems.\n\n"
+)
+
 # ── Fix Advisor prompts ───────────────────────────────────────────────────────
 
 _FIX_ADVISOR_TASK = """\
@@ -43,11 +51,12 @@ Call out any underlying issue that this fix does not address and should be track
 """
 
 
-def fix_advisor_clickup(ticket_id: str, slack_text: str, git_text: str) -> str:
-    return (
+def fix_advisor_clickup(ticket_id: str, slack_text: str, git_text: str, task_content: str = "") -> str:
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
         f"## Ticket: {ticket_id}\n\n"
-        f"## Slack context (mentions of {ticket_id}):\n"
+        + (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
+        + f"## Slack context (mentions of {ticket_id}):\n"
         f"{slack_text or '(no Slack mentions found)'}\n\n"
         f"## Git history (commits referencing {ticket_id}):\n"
         f"{git_text or '(no matching commits)'}\n\n"
@@ -56,7 +65,7 @@ def fix_advisor_clickup(ticket_id: str, slack_text: str, git_text: str) -> str:
 
 
 def fix_advisor_slack_thread(thread_text: str) -> str:
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
         f"## Slack thread content:\n{thread_text}\n\n"
         + _FIX_ADVISOR_TASK
@@ -64,7 +73,7 @@ def fix_advisor_slack_thread(thread_text: str) -> str:
 
 
 def fix_advisor_description(description: str, slack_text: str, git_text: str) -> str:
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
         f"## Incident description:\n{description}\n\n"
         f"## Related Slack context:\n"
@@ -88,7 +97,7 @@ def fix_advisor_stacktrace(
         f.get("class_method", "")
         for f in (parsed.get("all_project_frames") or [])[:5]
     ]
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on how to fix a Java exception.\n\n"
         f"## Exception: {exception_type}\n"
         f"Message: {exception_msg}\n"
@@ -137,11 +146,12 @@ List 2–4 concrete follow-up items that should be tracked separately.
 """
 
 
-def minimal_fix_clickup(ticket_id: str, slack_text: str, git_text: str) -> str:
-    return (
+def minimal_fix_clickup(ticket_id: str, slack_text: str, git_text: str, task_content: str = "") -> str:
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
         f"## Ticket: {ticket_id}\n\n"
-        f"## Slack context (mentions of {ticket_id}):\n"
+        + (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
+        + f"## Slack context (mentions of {ticket_id}):\n"
         f"{slack_text or '(no Slack mentions found)'}\n\n"
         f"## Git history (commits referencing {ticket_id}):\n"
         f"{git_text or '(no matching commits)'}\n\n"
@@ -150,7 +160,7 @@ def minimal_fix_clickup(ticket_id: str, slack_text: str, git_text: str) -> str:
 
 
 def minimal_fix_slack_thread(thread_text: str) -> str:
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
         f"## Slack thread content:\n{thread_text}\n\n"
         + _MINIMAL_FIX_TASK
@@ -158,7 +168,7 @@ def minimal_fix_slack_thread(thread_text: str) -> str:
 
 
 def minimal_fix_description(description: str, slack_text: str, git_text: str) -> str:
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
         f"## Incident description:\n{description}\n\n"
         f"## Related Slack context:\n"
@@ -182,7 +192,7 @@ def minimal_fix_stacktrace(
         f.get("class_method", "")
         for f in (parsed.get("all_project_frames") or [])[:5]
     ]
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on the smallest safe fix for a Java exception.\n\n"
         f"## Exception: {exception_type}\n"
         f"Message: {exception_msg}\n"
@@ -260,11 +270,12 @@ Aim for ~2 000–4 000 tokens.
 """
 
 
-def perf_advisor_clickup_prompt(ticket_id: str, slack_text: str, git_text: str, depth: str = "standard") -> str:
-    return (
+def perf_advisor_clickup_prompt(ticket_id: str, slack_text: str, git_text: str, depth: str = "standard", task_content: str = "") -> str:
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead identifying and resolving performance bottlenecks.\n\n"
         f"## Ticket: {ticket_id}\n\n"
-        f"## Slack context (mentions of {ticket_id}):\n"
+        + (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
+        + f"## Slack context (mentions of {ticket_id}):\n"
         f"{slack_text or '(no Slack mentions found)'}\n\n"
         f"## Git history (commits referencing {ticket_id}):\n"
         f"{git_text or '(no matching commits)'}\n\n"
@@ -273,7 +284,7 @@ def perf_advisor_clickup_prompt(ticket_id: str, slack_text: str, git_text: str, 
 
 
 def perf_advisor_slack_prompt(thread_text: str, depth: str = "standard") -> str:
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead identifying and resolving performance bottlenecks.\n\n"
         f"## Slack thread content:\n{thread_text}\n\n"
         + _perf_depth_instructions(depth)
@@ -294,7 +305,7 @@ def perf_advisor_description_prompt(
         "free_text":  "Free-text description",
     }.get(content_source) or content_source.replace("_", " ").replace(":", ": ")
 
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead identifying and resolving performance bottlenecks.\n\n"
         f"## Input ({source_label}):\n{content}\n\n"
         + _perf_depth_instructions(depth)
@@ -315,7 +326,7 @@ def perf_advisor_stacktrace_prompt(
         f.get("class_method", "")
         for f in (parsed.get("all_project_frames") or [])[:5]
     ]
-    return (
+    return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead identifying performance bottlenecks from a Java stack trace.\n\n"
         f"## Exception: {exception_type}\n"
         f"Message: {exception_msg}\n"
