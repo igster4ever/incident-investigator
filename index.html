@@ -251,9 +251,19 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
       <div id="fetch-required-banner" class="input-hint" style="display:none;color:#f59e0b"></div>
     </div>
     <div id="input-stacktrace" style="display:none">
+      <div id="img-toolbar" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+        <input type="file" id="img-file-input" accept="image/*" style="display:none">
+        <button class="act-btn" onclick="document.getElementById('img-file-input').click()">&#128206; Upload image</button>
+        <span style="font-size:11px;opacity:.5">or Cmd+V to paste screenshot</span>
+        <span id="img-status" style="font-size:11px;opacity:.8"></span>
+        <div id="img-thumbnail-wrap" style="display:none;align-items:center;gap:4px">
+          <img id="img-thumbnail" alt="preview" style="max-height:36px;border-radius:3px;vertical-align:middle;border:1px solid #1e293b">
+          <button class="act-btn" onclick="iiClearImage()" style="padding:2px 7px;font-size:11px">&#10005; Clear</button>
+        </div>
+      </div>
       <textarea id="val-stacktrace" class="text-input"
         style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:10px;min-height:120px"
-        placeholder="Paste a Java stack trace here&#10;&#10;java.lang.NullPointerException at..."></textarea>
+        placeholder="Paste a Java stack trace here&#10;&#10;java.lang.NullPointerException at...&#10;&#10;&#8212;&#8212; or upload / paste a screenshot above &#8212;&#8212;"></textarea>
     </div>
   </div>
 
@@ -492,6 +502,22 @@ function _dispatch(msg) {
     return;
   }
 
+  if (type === 'stacktrace_extracted') {
+    var ta = document.getElementById('val-stacktrace');
+    if (ta) ta.value = msg.stacktrace || '';
+    var imgStat = document.getElementById('img-status');
+    if (imgStat) imgStat.textContent = '✓ Extracted — review below then Generate';
+    _imgExtracting = false;
+    return;
+  }
+
+  if (type === 'stacktrace_extract_failed') {
+    var imgStat2 = document.getElementById('img-status');
+    if (imgStat2) imgStat2.textContent = '⚠ ' + (msg.message || 'Extraction failed');
+    _imgExtracting = false;
+    return;
+  }
+
   if (type === 'fetch_required') {
     _enableGenBtn();
     var banner = document.getElementById('fetch-required-banner');
@@ -721,6 +747,72 @@ window.iiToggleThinking = function() {
   if (btn) btn.textContent = open ? '▲' : '▼';
 };
 
+// ── Image extraction ────────────────────────────────────────────────────────
+var _imgExtracting = false;
+
+function _resizeToBase64(file, callback) {
+  var url = URL.createObjectURL(file);
+  var img = new Image();
+  img.onload = function() {
+    var maxPx  = 1400;
+    var scale  = Math.min(1, maxPx / Math.max(img.width, img.height));
+    var w = Math.round(img.width  * scale);
+    var h = Math.round(img.height * scale);
+    var canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+    var b64full = canvas.toDataURL('image/jpeg', 0.88);
+    // Retry at lower quality if >1 MB (base64 overhead ~4/3)
+    if (b64full.length * 0.75 > 1_000_000) {
+      b64full = canvas.toDataURL('image/jpeg', 0.72);
+    }
+    var b64thumb = canvas.toDataURL('image/jpeg', 0.25);
+    var data = b64full.replace(/^data:image\/jpeg;base64,/, '');
+    callback(data, b64thumb);
+  };
+  img.onerror = function() { URL.revokeObjectURL(url); };
+  img.src = url;
+}
+
+function _processImageFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  if (_inputMode !== 'stacktrace') return;
+  if (_imgExtracting) return;
+  _imgExtracting = true;
+
+  var stat = document.getElementById('img-status');
+  if (stat) stat.textContent = 'Resizing…';
+
+  _resizeToBase64(file, function(b64, thumbDataUrl) {
+    var thumb = document.getElementById('img-thumbnail');
+    var wrap  = document.getElementById('img-thumbnail-wrap');
+    if (thumb) thumb.src = thumbDataUrl;
+    if (wrap)  wrap.style.display = 'flex';
+
+    var ta = document.getElementById('val-stacktrace');
+    if (ta) ta.value = '';
+
+    if (stat) stat.textContent = 'Extracting stack trace…';
+    if (!_send('extract_stacktrace_image', { image_b64: b64, media_type: 'image/jpeg' })) {
+      if (stat) stat.textContent = '⚠ Bridge not connected';
+      _imgExtracting = false;
+    }
+  });
+}
+
+window.iiClearImage = function() {
+  var ta   = document.getElementById('val-stacktrace');
+  var wrap = document.getElementById('img-thumbnail-wrap');
+  var stat = document.getElementById('img-status');
+  var fi   = document.getElementById('img-file-input');
+  if (ta)   ta.value            = '';
+  if (wrap) wrap.style.display  = 'none';
+  if (stat) stat.textContent    = '';
+  if (fi)   fi.value            = '';
+  _imgExtracting = false;
+};
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
   _token = _loadToken();
@@ -733,6 +825,27 @@ document.addEventListener('DOMContentLoaded', function() {
   if (hash && !_token) {
     document.getElementById('token-input').value = hash;
   }
+
+  // File input → image extraction
+  var fi = document.getElementById('img-file-input');
+  if (fi) fi.addEventListener('change', function() {
+    if (fi.files && fi.files[0]) _processImageFile(fi.files[0]);
+    fi.value = '';
+  });
+
+  // Cmd+V paste → image extraction (only when stacktrace mode is active)
+  document.addEventListener('paste', function(e) {
+    if (_inputMode !== 'stacktrace') return;
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        e.preventDefault();
+        _processImageFile(items[i].getAsFile());
+        return;
+      }
+    }
+  });
 });
 
 })();

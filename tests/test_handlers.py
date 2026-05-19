@@ -14,7 +14,13 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ii_bridge.handlers import _handle_fix_advisor, _handle_minimal_fix, _handle_perf_advisor, HANDLERS
+from ii_bridge.handlers import (
+    _handle_fix_advisor,
+    _handle_minimal_fix,
+    _handle_perf_advisor,
+    _handle_extract_stacktrace_image,
+    HANDLERS,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -278,6 +284,94 @@ class TestPerfAdvisorHandler:
         assert mock_ws.last_of_type("perf_advisor_complete") is not None
 
 
+# ── Image extraction ──────────────────────────────────────────────────────────
+
+class TestExtractStacktraceImageHandler:
+
+    @pytest.mark.asyncio
+    async def test_empty_image_sends_failed_event(self, mock_ws):
+        await _handle_extract_stacktrace_image(mock_ws, {"image_b64": "", "media_type": "image/jpeg"})
+        failed = mock_ws.last_of_type("stacktrace_extract_failed")
+        assert failed is not None
+        assert "No image data" in failed["message"]
+
+    @pytest.mark.asyncio
+    async def test_missing_image_key_sends_failed_event(self, mock_ws):
+        await _handle_extract_stacktrace_image(mock_ws, {})
+        assert mock_ws.last_of_type("stacktrace_extract_failed") is not None
+
+    @pytest.mark.asyncio
+    async def test_success_emits_stacktrace_extracted(self, mock_ws):
+        extracted = "java.lang.NPE\n\tat com.example.Foo.bar(Foo.java:42)"
+        with patch(
+            "bridge_modules.shared._run_in_executor",
+            new_callable=AsyncMock,
+            return_value=extracted,
+        ):
+            await _handle_extract_stacktrace_image(mock_ws, {
+                "image_b64": "abc123",
+                "media_type": "image/png",
+            })
+        event = mock_ws.last_of_type("stacktrace_extracted")
+        assert event is not None
+        assert event["stacktrace"] == extracted
+
+    @pytest.mark.asyncio
+    async def test_extraction_error_emits_failed_event(self, mock_ws):
+        from ii_bridge.image_extractor import ExtractionError
+        with patch(
+            "bridge_modules.shared._run_in_executor",
+            new_callable=AsyncMock,
+            side_effect=ExtractionError("Not a stack trace"),
+        ):
+            await _handle_extract_stacktrace_image(mock_ws, {
+                "image_b64": "abc123",
+                "media_type": "image/jpeg",
+            })
+        failed = mock_ws.last_of_type("stacktrace_extract_failed")
+        assert failed is not None
+        assert "Not a stack trace" in failed["message"]
+
+    @pytest.mark.asyncio
+    async def test_status_emitted_before_result(self, mock_ws):
+        with patch(
+            "bridge_modules.shared._run_in_executor",
+            new_callable=AsyncMock,
+            return_value="NPE trace",
+        ):
+            await _handle_extract_stacktrace_image(mock_ws, {
+                "image_b64": "abc123",
+                "media_type": "image/jpeg",
+            })
+        types = [m["type"] for m in mock_ws.sent]
+        assert "status" in types
+        assert types.index("status") < types.index("stacktrace_extracted")
+
+    @pytest.mark.asyncio
+    async def test_defaults_media_type_to_jpeg(self, mock_ws):
+        captured = {}
+        async def fake_executor(fn, *args):
+            captured["args"] = args
+            return "trace"
+        with patch("bridge_modules.shared._run_in_executor", side_effect=fake_executor):
+            await _handle_extract_stacktrace_image(mock_ws, {"image_b64": "abc123"})
+        assert captured["args"][1] == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_no_stacktrace_extracted_on_failure(self, mock_ws):
+        from ii_bridge.image_extractor import ExtractionError
+        with patch(
+            "bridge_modules.shared._run_in_executor",
+            new_callable=AsyncMock,
+            side_effect=ExtractionError("bad image"),
+        ):
+            await _handle_extract_stacktrace_image(mock_ws, {
+                "image_b64": "abc123",
+                "media_type": "image/jpeg",
+            })
+        assert mock_ws.last_of_type("stacktrace_extracted") is None
+
+
 # ── HANDLERS dict ─────────────────────────────────────────────────────────────
 
 class TestHandlersDict:
@@ -290,7 +384,11 @@ class TestHandlersDict:
     def test_perf_advisor_registered(self):
         assert "perf_advisor_report" in HANDLERS
 
+    def test_extract_stacktrace_image_registered(self):
+        assert "extract_stacktrace_image" in HANDLERS
+
     def test_handlers_are_callable(self):
         assert callable(HANDLERS["fix_advisor_report"])
         assert callable(HANDLERS["minimal_fix_report"])
         assert callable(HANDLERS["perf_advisor_report"])
+        assert callable(HANDLERS["extract_stacktrace_image"])

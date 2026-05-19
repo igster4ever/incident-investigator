@@ -1,19 +1,25 @@
 """
-ii_bridge/handlers.py — Fix Advisor and Minimal Fix bridge handlers.
+ii_bridge/handlers.py — Fix Advisor, Minimal Fix, Perf Advisor, and image extraction handlers.
 
 Handles:
-  type: 'fix_advisor_report'   — repo + root cause + high-level fix + effort/risk
-  type: 'minimal_fix_report'   — smallest safe change + effort + tech debt callout
+  type: 'fix_advisor_report'         — repo + root cause + high-level fix + effort/risk
+  type: 'minimal_fix_report'         — smallest safe change + effort + tech debt callout
+  type: 'perf_advisor_report'        — bottleneck ID, root cause, resolution
+  type: 'extract_stacktrace_image'   — extract verbatim stack trace from a screenshot
 
 Data-gathering helpers are imported from triage_handlers (not duplicated).
 All four input modes are supported: clickup, slack_thread, description, stacktrace.
 
 Emits:
-  fix_advisor_progress    { text: str }
-  fix_advisor_complete    { report: str }
-  minimal_fix_progress    { text: str }
-  minimal_fix_complete    { report: str }
-  error                   { message: str }
+  fix_advisor_progress        { text: str }
+  fix_advisor_complete        { report: str }
+  minimal_fix_progress        { text: str }
+  minimal_fix_complete        { report: str }
+  perf_advisor_progress       { text: str }
+  perf_advisor_complete       { report: str }
+  stacktrace_extracted        { stacktrace: str }
+  stacktrace_extract_failed   { message: str }
+  error                       { message: str }
 
 Note: bridge_modules imports are deferred inside functions to break the circular
 import that arises when bridge_modules/__init__ imports this module via the shim.
@@ -299,8 +305,31 @@ async def _handle_perf_advisor(ws, payload: dict) -> None:
     await ws.send(json.dumps({"type": "perf_advisor_complete", "report": report}))
 
 
+async def _handle_extract_stacktrace_image(ws, payload: dict) -> None:
+    from bridge_modules.shared import _run_in_executor
+    from ii_bridge.image_extractor import ExtractionError, extract_stacktrace_from_image
+
+    image_b64  = (payload.get("image_b64")  or "").strip()
+    media_type = (payload.get("media_type") or "image/jpeg").strip()
+
+    if not image_b64:
+        await ws.send(json.dumps({"type": "stacktrace_extract_failed", "message": "No image data provided"}))
+        return
+
+    await ws.send(json.dumps({"type": "status", "text": "Extracting stack trace from image…"}))
+
+    try:
+        stacktrace = await _run_in_executor(extract_stacktrace_from_image, image_b64, media_type)
+    except ExtractionError as exc:
+        await ws.send(json.dumps({"type": "stacktrace_extract_failed", "message": str(exc)}))
+        return
+
+    await ws.send(json.dumps({"type": "stacktrace_extracted", "stacktrace": stacktrace}))
+
+
 HANDLERS = {
     "fix_advisor_report":        _handle_fix_advisor,
     "minimal_fix_report":        _handle_minimal_fix,
     "perf_advisor_report":       _handle_perf_advisor,
+    "extract_stacktrace_image":  _handle_extract_stacktrace_image,
 }
