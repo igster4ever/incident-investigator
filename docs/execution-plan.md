@@ -153,6 +153,169 @@ textarea → Fix Advisor / Minimal Fix produces a valid report from it.
 
 ---
 
+## Phase 3.6 — Integration Connectivity & Token Refresh
+
+**Goal:** Surface the health of Slack and ClickUp integrations in the UI, and allow a user
+to submit a fresh API token without restarting the bridge or touching the terminal.
+
+**Motivation:** Token expiry for both integrations has caused repeated silent failures and
+friction (Slack search silently degraded; ClickUp fetch returned `None` with no visible
+feedback). This phase makes integration status visible and self-serviceable from the UI.
+
+---
+
+### WS event contract
+
+| Direction | Event | Payload |
+|-----------|-------|---------|
+| client → bridge | `check_connectivity` | `{}` (no data needed) |
+| bridge → client | `connectivity_status` | `{ slack: ConnStatus, clickup: ConnStatus }` |
+| client → bridge | `update_token` | `{ integration: "slack" \| "clickup", token: "<new token>" }` |
+| bridge → client | `token_updated` | `{ integration: str, ok: bool, error?: str }` |
+
+```
+ConnStatus = {
+  ok:        bool,          # API ping succeeded
+  token_set: bool,          # token file exists and is non-empty
+  error?:    str            # human-readable error if ok=false
+}
+```
+
+`check_connectivity` and `update_token` follow the same `{ type, token, payload }` envelope
+as all other bridge messages.
+
+---
+
+### Bridge handler design
+
+**New file:** `ii_bridge/connectivity_handler.py`
+
+Two handlers — `_handle_check_connectivity` and `_handle_update_token` — both
+delegated to from a single entry in `HANDLERS`:
+
+```
+"check_connectivity": _handle_check_connectivity
+"update_token":       _handle_update_token
+```
+
+#### `_handle_check_connectivity`
+
+For each integration, attempt a lightweight read API call:
+
+| Integration | Endpoint | Success condition |
+|-------------|----------|-------------------|
+| ClickUp | `GET /api/v2/user` (with stored token) | HTTP 200 |
+| Slack | `GET https://slack.com/api/auth.test` (with stored token, `Authorization: Bearer <tok>`) | `{"ok": true}` in JSON body |
+
+Both calls run via `_run_in_executor` to avoid blocking the async loop.
+`token_set` is true if the respective token file exists and is non-empty, regardless of
+whether the API call succeeds. This lets the UI distinguish "no token at all" from
+"token set but expired".
+
+Emit `connectivity_status` once both checks complete (parallel is fine).
+
+#### `_handle_update_token`
+
+1. Validate `integration` is one of `"slack"` or `"clickup"`.
+2. Validate `token` is non-empty.
+3. Write token to the relevant file:
+   - Slack → `~/.claude/skills/shared/.slack_token`
+   - ClickUp → `~/.claude/skills/shared/.clickup_token`
+4. Do a quick API ping (same as connectivity check) to confirm the new token works.
+5. Emit `token_updated { integration, ok, error? }`.
+6. Also emit an updated `connectivity_status` after a successful write, so the UI
+   reflects the new state without requiring a second check.
+
+**Note:** `clickup_fetcher.py` caches `_CACHE_TEAM_ID` at module level. On token update,
+this cache must be invalidated so the next ClickUp call fetches a fresh team ID with the
+new token. Export a `reset_clickup_cache()` function from `clickup_fetcher.py` for this.
+
+---
+
+### Token file paths
+
+| Integration | File | Fallback |
+|-------------|------|---------|
+| ClickUp | `~/.claude/skills/shared/.clickup_token` | `CLICKUP_TOKEN` env var |
+| Slack | `~/.claude/skills/shared/.slack_token` | — (no env var fallback currently) |
+
+Both files should be `chmod 600` after write. Use `Path.chmod(0o600)` after `write_text`.
+
+---
+
+### UI spec
+
+**Location:** a small "Connections" section appended to the settings/utility area, below
+the existing Slack toggle. It should be always-visible when the bridge is connected (not
+hidden behind any mode selector).
+
+**Components:**
+
+```
+[ ⚡ Connections ]  ← collapsible section header, collapsed by default
+
+  Slack     [●] Connected      ← green dot
+  ClickUp   [●] Token missing  ← amber dot (token_set=false)
+            [─────────────────────] [Update]  ← token input + submit
+
+            [↻ Check]  ← re-runs check_connectivity
+```
+
+**Status dot colours:**
+- `ok=true`  → green (`#22c55e`)
+- `ok=false, token_set=true` → red (`#ef4444`) with short error message
+- `ok=false, token_set=false` → amber (`#f59e0b`) — "No token"
+
+**Behaviour:**
+- On bridge connect, `check_connectivity` is sent automatically (on WS `open` event).
+- The token input is always visible when `ok=false` for that integration; hidden when
+  `ok=true` (no need to replace a working token).
+- Submitting an empty token field is a no-op (disabled button state).
+- After `token_updated { ok: true }`, the input collapses and the dot goes green.
+- After `token_updated { ok: false }`, show `error` inline beneath the input.
+- The connections section is collapsed by default; the dot in the header reflects the
+  worst status (`red > amber > green`) so a problem is visible without expanding.
+
+**WS message shape (client → bridge):**
+
+```js
+_send('check_connectivity', {});
+
+_send('update_token', {
+  integration: 'slack',   // or 'clickup'
+  token: inputValue.trim()
+});
+```
+
+---
+
+### New files
+
+- `ii_bridge/connectivity_handler.py` — `_handle_check_connectivity`, `_handle_update_token`
+- `tests/test_connectivity_handler.py` — unit tests (mock HTTP calls, mock file writes)
+
+### Changes to existing files
+
+- `ii_bridge/handlers.py` — import and add two new keys to `HANDLERS`
+- `ii_bridge/__init__.py` — no change (already exports `HANDLERS`)
+- `ii_bridge/clickup_fetcher.py` — add `reset_clickup_cache()` to clear `_CACHE_TEAM_ID`
+- `bridge_modules/incident_handlers.py` — no change (re-exports `HANDLERS` automatically)
+- `index.html` — Connections section in settings area; `check_connectivity` on WS open
+
+### Tests
+
+- Mock HTTP calls for ClickUp `/user` and Slack `auth.test`
+- Verify correct file is written for each integration, with `chmod 600`
+- Verify `_CACHE_TEAM_ID` is cleared on token update
+- Verify `token_updated` is emitted followed by a fresh `connectivity_status`
+- Verify `ok=false` + `error` is emitted when the new token fails the ping
+
+**Exit criteria:** Bridge connected → Connections section shows status automatically →
+user pastes a fresh Slack token → dot goes green → subsequent Slack-mode analysis
+uses the new token without bridge restart.
+
+---
+
 ## Phase 4 — Prompt quality + confidence display (Session 4)
 
 **Goal:** Confidence score is surfaced visually; prompts tuned for HKJC monorepo specifics.

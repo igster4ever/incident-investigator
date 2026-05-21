@@ -22,6 +22,7 @@ open directly in a browser. Analysis is delegated to the GPS·ADR Radar bridge s
 | `tests/test_handlers.py` | Handler flow tests (mock WS) |
 | `tests/test_image_extractor.py` | Image extractor unit tests |
 | `tests/test_fetcher.py` | Fetcher unit tests |
+| `tests/test_fix_advisor_aop5589.py` | Regression tests for Fix Advisor — AOP-5589 (OCA/ats-sportsbook); unit + integration |
 | `docs/architecture.md` | System diagram, WS event protocol, module ownership |
 | `docs/design-spikes.md` | Key design decisions with rationale |
 | `docs/execution-plan.md` | Phased delivery plan — current phase and backlog |
