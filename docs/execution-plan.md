@@ -402,6 +402,151 @@ Not a prerequisite for any other phase.
 
 ---
 
+## Session I — Semantic Search Core (squad-gps-radar)
+
+**Goal:** LanceDB + Voyage AI index live; `GET /wiki/search` serving hybrid (vector + BM25)
+results across all wiki axes; existing articles backfilled; on-demand indexing wired into
+the article write paths.
+
+**Tech decisions (2026-05-22):**
+- **Store:** LanceDB (file-backed, in-process, native hybrid search via Tantivy + HNSW)
+- **Embedder:** Voyage AI `voyage-3-lite` (512-dim, async client, same API key as Claude)
+- **Hybrid mode:** RRF re-ranking (vector + FTS in a single LanceDB query)
+- **Existing FTS5 (`wiki/fts.db`) unchanged** — keyword `POST /wiki/search` stays as-is;
+  semantic layer is strictly additive
+
+**LanceDB table schema:**
+```
+wiki_articles (
+    id          TEXT PRIMARY KEY   -- sha256(path), upsert key
+    path        TEXT               -- e.g. "incidents/aop-1234.md"
+    axis        TEXT               -- squads | customers | … | incidents
+    slug        TEXT
+    title       TEXT
+    body        TEXT               -- full markdown (for FTS sub-index)
+    risk        TEXT
+    confidence  FLOAT
+    indexed_at  TEXT               -- ISO timestamp
+    vector      ARRAY(FLOAT, 512)  -- voyage-3-lite
+)
+```
+
+### New files
+- [ ] `wiki/semantic.py` — `index_article_async(path)`, `search_semantic(q, axes, limit, mode)`,
+  `build_semantic_index(wiki_dir)`; LanceDB table init; Voyage AI async embed client;
+  model version stored in table metadata (rebuild required on model change)
+
+### Changes to existing files
+- [ ] `requirements.txt` (bridge server) — add `lancedb`, `voyageai`
+- [ ] `bridge_server/wiki_routes.py` — `GET /wiki/search?q&axes&limit&mode=hybrid`;
+  graceful FTS5 fallback when semantic index absent;
+  `POST /wiki/rebuild-index?type=semantic` one-off management endpoint
+- [ ] `wiki_routes.py` article write call sites — fire-and-forget
+  `asyncio.create_task(index_article_async(path))` after `write_ticket_article`
+  and `write_incident_article`
+- [ ] `build_wiki.py` — call `build_semantic_index()` after `build_fts_index()`
+
+### Response shape (`GET /wiki/search`)
+```json
+{
+  "ok": true,
+  "query": "bet-placement latency",
+  "axes": ["incidents", "tickets"],
+  "mode": "hybrid",
+  "results": [
+    {
+      "path": "incidents/aop-1234.md",
+      "axis": "incidents",
+      "title": "Bet Placement Latency Spike 2026-04-12",
+      "snippet": "…p99 latency spiked to 4.2s…",
+      "score": 0.87,
+      "confidence": 0.9,
+      "match_type": "hybrid"
+    }
+  ],
+  "count": 7
+}
+```
+
+### Risks / constraints
+- Embedding model version drift: document model version in LanceDB table metadata;
+  full rebuild required if model changes — do not change model silently
+- LanceDB FTS sub-index is rebuilt explicitly (`create_fts_index(replace=True)`) on
+  full rebuild cycles; on-demand path is vector-only for the just-indexed article
+- `pyarrow` (~70 MB) is a hard dep of `lancedb` — one-off install cost only
+
+**Exit criteria:**
+- `POST /wiki/rebuild-index` backfills all existing articles without error
+- `GET /wiki/search?q=bet-placement+latency&axes=incidents,tickets` returns ranked results
+- A new incident synthesis auto-triggers indexing (fire-and-forget; does not delay WS response)
+- `mode=keyword` falls back to FTS5; `mode=semantic` or `mode=hybrid` uses LanceDB
+
+---
+
+## Session J — wiki-frontend Search Panel (wiki-frontend)
+
+**Goal:** Cross-axis semantic search available from the wiki SPA; related articles visible
+in axis detail views. Depends on Session I endpoint being live.
+
+### New files
+- [ ] `src/components/SearchPanel.tsx` — search input, axis filter chips (multi-select),
+  results list grouped by axis; confidence badge + match_type pill per result;
+  debounced input (300 ms); empty-safe (no results state)
+
+### Changes to existing files
+- [ ] `src/api/types.ts` — `WikiSearchResult`, `WikiSearchResponse` interfaces
+- [ ] `src/api/client.ts` — `wiki.search(q, axes?, limit?, mode?)` → `GET /wiki/search`
+- [ ] `src/App.tsx` — `{ type: "search" }` view + nav entry (`🔍 Search`); SearchPanel
+  wired in centre column
+- [ ] Axis detail panels (starting with `TicketsPanel`, `IncidentsPanel`) — "Related"
+  section: on article open, call `wiki.search(title, neighbourAxes, 5)` and render
+  compact result list beneath article body
+
+**Exit criteria:**
+- Search box returns hybrid results across all axes
+- Axis filter chips narrow results correctly; clearing filter returns all axes
+- Opening a ticket article shows ≤5 semantically related incidents/themes
+
+---
+
+## Session K — incident-investigator Related Incidents (incident-investigator)
+
+**Goal:** Every investigation report surfaces semantically similar past incidents via HTMX,
+with no new JS required. Depends on Session I endpoint being live.
+
+### New endpoint (squad-gps-radar)
+- [ ] `bridge_server/wiki_routes.py` — `GET /wiki/related-html?q=...&axes=incidents&limit=5`
+  SSR HTML fragment (extends `article-html` pattern); empty-safe (`<p class="wh-none">`)
+
+### Changes to existing files (incident-investigator)
+- [ ] `index.html` — `<div id="related-incidents" hx-get="/wiki/related-html?q=..."
+  hx-trigger="revealed" hx-swap="innerHTML">` injected after report renders;
+  query string built from `ticket_id` — no extra LLM call;
+  `hx-trigger="revealed"` defers fetch until section scrolls into view
+
+**Notes:**
+- Empty-safe: if semantic index absent or no results, fragment renders a single
+  "No related incidents found" line — never an error state in the UI
+- HTMX pattern already established by Session H `article-html` endpoint
+
+**Exit criteria:**
+- Fix Advisor report for AOP-XXXX renders a populated "Related incidents" section
+- Section appears empty (not errored) when index is absent or query returns nothing
+- No new JS added to `index.html`
+
+---
+
+## Future — RAG injection + GPS dashboard semantic enrichment
+
+Deferred until Session K search quality is validated in practice.
+
+- **RAG:** replace `POST /wiki/ask`'s FTS5 context selection with `search_semantic()` —
+  same call shape, improved context relevance for Fix/Perf Advisor prompts
+- **GPS dashboard:** "Related articles" in `EventDetailPanel` for `wiki.*` / `incidents.*`
+  stream events; driven by same `GET /wiki/search` endpoint
+
+---
+
 ## Phase 5 — History + multi-ticket (Future)
 
 **Goal:** Analyst can review prior investigations and compare across tickets.
