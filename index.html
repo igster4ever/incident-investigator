@@ -148,6 +148,52 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   margin: 0; min-height: 120px;
 }
 
+/* ── Output tab bar ── */
+#output-tabs {
+  display: none; flex-shrink: 0;
+  border-bottom: 1px solid #1e293b; background: #060e1a;
+}
+.out-tab {
+  padding: 8px 16px; background: none; border: none; border-bottom: 2px solid transparent;
+  color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer;
+  font-family: inherit; transition: color .15s, border-color .15s;
+}
+.out-tab:hover { color: #94a3b8; }
+.out-tab.active { color: #93c5fd; border-bottom-color: #3b82f6; }
+
+/* ── Wiki panel ── */
+#wiki-wrap { display: none; flex: 1; overflow-y: auto; padding: 16px 20px; }
+.wh-article { max-width: 760px; }
+.wh-header {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #1e293b;
+}
+.wh-title  { font-size: 13px; font-weight: 700; color: #e2e8f0; }
+.wh-conf   { font-size: 10px; font-family: 'JetBrains Mono','Fira Code',monospace;
+             padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+.wh-conf-hi  { background: #14532d; color: #4ade80; }
+.wh-conf-mid { background: #713f12; color: #fbbf24; }
+.wh-conf-lo  { background: #431407; color: #fb923c; }
+.wh-meta-link { font-size: 10px; color: #60a5fa; text-decoration: none; }
+.wh-meta-link:hover { text-decoration: underline; }
+.wh-meta-dim  { font-size: 10px; color: #475569; }
+
+/* wiki article body — scoped to #wiki-wrap */
+.wh-body h1,.wh-body h2 { font-size: 12px; font-weight: 700; color: #cbd5e1; margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid #1e293b; }
+.wh-body h3,.wh-body h4 { font-size: 11px; font-weight: 700; color: #94a3b8; margin: 12px 0 4px; }
+.wh-body p  { color: #94a3b8; line-height: 1.65; margin-bottom: 8px; }
+.wh-body ul,.wh-body ol { color: #94a3b8; padding-left: 18px; margin-bottom: 8px; line-height: 1.65; }
+.wh-body li { margin-bottom: 3px; }
+.wh-body code { font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 10px; background: #0f172a; color: #7dd3fc; padding: 1px 4px; border-radius: 3px; }
+.wh-body pre { background: #0f172a; border: 1px solid #1e293b; border-radius: 4px; padding: 10px 12px; overflow-x: auto; margin-bottom: 10px; }
+.wh-body pre code { background: none; padding: 0; color: #e2e8f0; font-size: 10px; }
+.wh-body strong { color: #cbd5e1; }
+.wh-body hr { border: none; border-top: 1px solid #1e293b; margin: 12px 0; }
+.wh-body a { color: #60a5fa; }
+.wh-body a:hover { text-decoration: underline; }
+.wh-loading { color: #334155; font-size: 11px; font-style: italic; padding: 8px 0; }
+.wh-err,.wiki-err { color: #f87171; font-size: 11px; padding: 8px 0; }
+
 /* ── Footer ── */
 #footer {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -163,6 +209,8 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .act-btn.primary { border-color: #1d4ed8; color: #60a5fa; }
 .act-btn.primary:hover { border-color: #3b82f6; color: #93c5fd; background: rgba(59,130,246,.08); }
 #followup-status { font-size: 10px; color: #60a5fa; }
+#wiki-save-chip { display: none; align-items: center; gap: 6px; }
+#wiki-conf-text { font-size: 10px; color: #94a3b8; }
 
 /* ── Token gate ── */
 #token-gate {
@@ -185,6 +233,7 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 #token-submit:hover { background: #2563eb; }
 #token-error { font-size: 10px; color: #ef4444; margin-top: 6px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0/dist/htmx.min.js" defer></script>
 </head>
 <body>
 <div id="app">
@@ -298,6 +347,12 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
     </div>
   </div>
 
+  <!-- ── Output tab bar (hidden until wiki article available) ── -->
+  <div id="output-tabs">
+    <button id="tab-report" class="out-tab active" onclick="iiShowTab('report')">&#128203; Report</button>
+    <button id="tab-wiki"   class="out-tab"        onclick="iiShowTab('wiki')">&#128218; Wiki</button>
+  </div>
+
   <!-- ── Output ── -->
   <div id="output-wrap">
     <pre id="output"><span style="color:#334155;font-style:italic">
@@ -320,11 +375,26 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 </span></pre>
   </div>
 
+  <!-- ── Wiki panel (HTMX target) ── -->
+  <div id="wiki-wrap">
+    <div id="wiki-content"><p class="wh-loading">Loading article&hellip;</p></div>
+  </div>
+
   <!-- ── Footer ── -->
   <div id="footer">
     <button id="followup-btn" class="act-btn primary" onclick="iiFollowUp()" style="display:none">&#128295; Code Change Suggestions</button>
     <button id="save-btn"     class="act-btn"         onclick="iiSave()"     style="display:none">&#8659; Save .md</button>
     <span id="followup-status"></span>
+    <!-- Borderline confidence prompt -->
+    <div id="wiki-save-chip">
+      <span id="wiki-conf-text"></span>
+      <button class="act-btn primary" onclick="iiSaveToWiki()">&#128218; Save to Wiki</button>
+      <button class="act-btn"         onclick="iiDismissWikiSave()">Dismiss</button>
+    </div>
+    <!-- Wiki saved actions -->
+    <button id="wiki-view-btn" class="act-btn primary" onclick="iiShowTab('wiki')" style="display:none">&#128218; View Wiki</button>
+    <a id="wiki-ext-link" class="act-btn" href="http://localhost:5173" target="_blank" rel="noopener"
+       style="display:none;text-decoration:none">&#8599; GPS Wiki</a>
   </div>
 
 </div><!-- #app -->
@@ -359,6 +429,8 @@ var _lastReport   = '';
 var _lastAnalysis = '';
 var _lastMode     = '';
 var _lastInput    = '';
+var _wikiPath     = null;   // relative path once article is saved
+var _wikiPending  = false;  // borderline prompt showing
 var _reconnectTimer = null;
 
 var _MODES = {
@@ -494,19 +566,34 @@ function _dispatch(msg) {
 
   // Complete events
   if (type === 'triage_complete') {
-    _onComplete(msg.report || '');
+    _onComplete(msg.report || '', msg);
     return;
   }
   if (type === 'fix_advisor_complete') {
-    _onComplete(msg.report || '');
+    _onComplete(msg.report || '', msg);
     return;
   }
   if (type === 'minimal_fix_complete') {
-    _onComplete(msg.report || '');
+    _onComplete(msg.report || '', msg);
     return;
   }
   if (type === 'perf_advisor_complete') {
-    _onComplete(msg.report || '');
+    _onComplete(msg.report || '', msg);
+    return;
+  }
+
+  if (type === 'wiki_saved') {
+    _wikiPending = false;
+    _wikiPath    = msg.wiki_path || null;
+    _showWikiChip(null);           // hide save prompt
+    _showWikiActions(_wikiPath);
+    return;
+  }
+
+  if (type === 'wiki_save_failed') {
+    _wikiPending = false;
+    _showWikiChip(null);
+    _setStatus('⚠ Wiki save failed: ' + (msg.message || 'unknown error'));
     return;
   }
 
@@ -560,12 +647,14 @@ function _dispatch(msg) {
   }
 }
 
-function _onComplete(report) {
+function _onComplete(report, msg) {
   var tp = document.getElementById('thinking-panel');
   var tg = document.getElementById('thinking-toggle');
   if (tp) { tp.classList.remove('open'); if (tg) tg.textContent = '▼'; }
 
   _lastReport = report;
+  _wikiPath   = null;
+  _wikiPending = false;
   var out = document.getElementById('output');
   if (out) { out.textContent = report; _applyTheme(); }
 
@@ -577,6 +666,22 @@ function _onComplete(report) {
   var saveb = document.getElementById('save-btn');
   if (fb)    fb.style.display    = (report && mode && mode.hasFollowup) ? '' : 'none';
   if (saveb) saveb.style.display = report ? '' : 'none';
+
+  // ── Wiki state from server ─────────────────────────────────────────────────
+  _showWikiChip(null);
+  _showWikiActions(null);
+  _hideOutputTabs();
+
+  var ws = msg && msg.wiki_status;
+  if (ws === 'saved') {
+    _wikiPath = msg.wiki_path || null;
+    _showWikiActions(_wikiPath);
+  } else if (ws === 'prompt') {
+    var conf = msg.confidence || '?';
+    _wikiPending = true;
+    _showWikiChip('Confidence ' + conf + '/10 — save to wiki?');
+  }
+  // 'skipped' or missing: no wiki UI shown
 }
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
@@ -710,6 +815,15 @@ window.iiGenerate = function() {
   document.getElementById('save-btn').style.display      = 'none';
   document.getElementById('followup-status').textContent = '';
 
+  // Reset wiki state
+  _wikiPath    = null;
+  _wikiPending = false;
+  _showWikiChip(null);
+  _showWikiActions(null);
+  _hideOutputTabs();
+  var wc = document.getElementById('wiki-content');
+  if (wc) { wc.innerHTML = '<p class="wh-loading">Loading article&hellip;</p>'; delete wc.dataset.loaded; }
+
   var tp = document.getElementById('thinking-panel');
   var tt = document.getElementById('thinking-text');
   var tg = document.getElementById('thinking-toggle');
@@ -721,6 +835,91 @@ window.iiGenerate = function() {
   if (_analysis === 'perf_advisor') payload.depth = _depth;
   if (_inputMode === 'clickup') payload.slack_enabled = _slackEnabled;
   _send(modeConf.sendEvent, payload);
+};
+
+// ── Wiki UI helpers ─────────────────────────────────────────────────────────
+
+function _showWikiChip(label) {
+  var chip = document.getElementById('wiki-save-chip');
+  var txt  = document.getElementById('wiki-conf-text');
+  if (!chip) return;
+  if (label) {
+    if (txt) txt.textContent = label;
+    chip.style.display = 'flex';
+  } else {
+    chip.style.display = 'none';
+    if (txt) txt.textContent = '';
+  }
+}
+
+function _showWikiActions(wikiPath) {
+  var viewBtn = document.getElementById('wiki-view-btn');
+  var extLink = document.getElementById('wiki-ext-link');
+  var tabs    = document.getElementById('output-tabs');
+  if (wikiPath) {
+    if (viewBtn) viewBtn.style.display = '';
+    if (extLink) extLink.style.display = '';
+    if (tabs)    tabs.style.display    = 'flex';
+  } else {
+    if (viewBtn) viewBtn.style.display = 'none';
+    if (extLink) extLink.style.display = 'none';
+  }
+}
+
+function _hideOutputTabs() {
+  var tabs = document.getElementById('output-tabs');
+  if (tabs) tabs.style.display = 'none';
+  // Ensure report pane is visible
+  var ow = document.getElementById('output-wrap');
+  var ww = document.getElementById('wiki-wrap');
+  if (ow) ow.style.display = '';
+  if (ww) ww.style.display = 'none';
+  document.querySelectorAll('.out-tab').forEach(function(b) {
+    b.classList.toggle('active', b.id === 'tab-report');
+  });
+}
+
+window.iiShowTab = function(tab) {
+  var ow = document.getElementById('output-wrap');
+  var ww = document.getElementById('wiki-wrap');
+  document.querySelectorAll('.out-tab').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.tab === tab || b.id === 'tab-' + tab);
+  });
+  if (tab === 'wiki') {
+    if (ow) ow.style.display = 'none';
+    if (ww) ww.style.display = '';
+    // Fetch article via HTMX if we have a path and haven't loaded it yet
+    if (_wikiPath) {
+      var wc = document.getElementById('wiki-content');
+      if (wc && !wc.dataset.loaded) {
+        wc.innerHTML = '<p class="wh-loading">Loading article&hellip;</p>';
+        htmx.ajax('GET', 'http://localhost:7432/wiki/article-html/' + _wikiPath, {target: '#wiki-content', swap: 'innerHTML'});
+        wc.dataset.loaded = '1';
+      }
+    }
+  } else {
+    if (ow) ow.style.display = '';
+    if (ww) ww.style.display = 'none';
+  }
+};
+
+window.iiSaveToWiki = function() {
+  if (!_wikiPending || !_lastReport) return;
+  _showWikiChip(null);
+  _wikiPending = false;
+  _setStatus('Saving to wiki…');
+  _send('save_to_wiki', {
+    report:     _lastReport,
+    analysis:   _lastAnalysis,
+    mode:       _lastMode,
+    input:      _lastInput,
+    confidence: 7,
+  });
+};
+
+window.iiDismissWikiSave = function() {
+  _wikiPending = false;
+  _showWikiChip(null);
 };
 
 // ── Follow-up (Triage only) ─────────────────────────────────────────────────

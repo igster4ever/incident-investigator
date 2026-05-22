@@ -153,6 +153,34 @@ textarea → Fix Advisor / Minimal Fix produces a valid report from it.
 
 ---
 
+## Session H — Incident Wiki Integration (2026-05-22) ✅
+
+**Goal:** At the end of a successful investigation, auto-save (or prompt to save) a wiki
+article to the GPS Wiki `incidents` axis. View the article inline via an HTMX-powered panel.
+
+### Completed
+- [x] `wiki/incident_synthesis.py` — `parse_confidence_score`, `synthesise_incident`,
+  `merge_incident_article`, `write_incident_article`; existing article → merge, new → create
+- [x] `ii_bridge/wiki_integration.py` — sys.path adapter; `WIKI_AVAILABLE` flag + graceful stubs
+- [x] `wiki/index.py` — `"incidents"` added to `_AXES`
+- [x] `bridge_server/wiki_routes.py` — `"incidents"` in activity AXES;
+  new `GET /wiki/article-html/{path}` SSR endpoint (markdown → HTML fragment for HTMX)
+- [x] `ii_bridge/handlers.py` — confidence parsing after report complete:
+  ≥8/10 auto-save → `wiki_status:"saved"`, 6–7/10 → `wiki_status:"prompt"`, ≤5 → `"skipped"`;
+  new `_handle_save_to_wiki` handler registered as `"save_to_wiki"` in HANDLERS
+- [x] `index.html` — HTMX 2.0 CDN; Report / Wiki tab bar; wiki panel (`htmx.ajax` on tab open);
+  borderline confidence save chip; "View Wiki" + "↗ GPS Wiki" footer buttons
+
+**Confidence thresholds (non-negotiable, do not change without discussion):**
+- ≥ 8/10 → auto-save silently
+- 6–7/10 → prompt user with "Confidence N/10 — save to wiki?" chip
+- ≤ 5/10 → skip entirely
+
+**HTMX Phase 1 note:** This session introduced HTMX to the SPA. The wiki panel is the
+first HTMX interaction. Phases 3.6 and 3.7 (below) build on this foundation.
+
+---
+
 ## Phase 3.6 — Integration Connectivity & Token Refresh
 
 **Goal:** Surface the health of Slack and ClickUp integrations in the UI, and allow a user
@@ -314,6 +342,48 @@ _send('update_token', {
 user pastes a fresh Slack token → dot goes green → subsequent Slack-mode analysis
 uses the new token without bridge restart.
 
+**⚠ HTMX implementation note (decided 2026-05-22):** The Connections strip is an ideal
+HTMX Phase 2 target. Rather than hand-rolling fetch + DOM manipulation, implement with:
+- `hx-post="/bridge/check-connectivity"` + `hx-trigger="load, every 60s"` on the strip div
+- Bridge returns a pre-rendered HTML fragment (status dots + labels)
+- Token update input: `hx-post="/bridge/update-token"`, server returns updated strip HTML
+This removes ~30 lines of JS and keeps the SPA declarative. The SSR endpoint pattern is
+already established by `GET /wiki/article-html/{path}` from Session H.
+
+---
+
+## Phase 3.7 — HTMX WebSocket Streaming (Future)
+
+**Goal:** Replace the hand-rolled WS event loop with HTMX's WebSocket extension. The server
+emits HTML fragments rather than JSON; HTMX injects them via out-of-band (OOB) swaps.
+
+**Why:** Removes ~200 lines of JS dispatch/DOM manipulation. Server owns all rendering logic.
+The SPA becomes a thin hypermedia shell — closer to zero custom JS.
+
+### Architecture change
+
+Current (JSON over WS):
+```
+server → { type: "fix_advisor_progress", text: "..." }
+JS     → document.getElementById('output').textContent += msg.text
+```
+
+Target (HTML over WS via HTMX OOB):
+```
+server → <pre id="output" hx-swap-oob="beforeend">...next chunk...</pre>
+          <span id="wiki-status" hx-swap-oob="outerHTML"><a href="...">Saved ✓</a></span>
+HTMX   → injects both fragments in one message, no JS needed
+```
+
+### Prerequisites
+- Phase 3.6 complete (HTMX already active in SPA)
+- Bridge handlers refactored to emit HTML strings instead of JSON progress events
+- `hx-ext="ws"` on the WS connect div; `ws-connect` attribute replaces `_connect()` JS
+
+### Scope
+This is a full rewrite of the streaming output model. Treat as its own dedicated session.
+Not a prerequisite for any other phase.
+
 ---
 
 ## Phase 4 — Prompt quality + confidence display (Session 4)
@@ -321,8 +391,10 @@ uses the new token without bridge restart.
 **Goal:** Confidence score is surfaced visually; prompts tuned for HKJC monorepo specifics.
 
 ### Tasks
-- [ ] Parse confidence score from markdown output (`Confidence: N/10`) and render as a
-  coloured score badge (green ≥7, amber 4–6, red <4) in the footer after generation
+- [x] Parse confidence score from markdown output (`Confidence: N/10`) — done in Session H
+  (`wiki/incident_synthesis.py::parse_confidence_score`); used for wiki-save gating
+- [ ] Render confidence as a coloured score badge in the footer after generation
+  (green ≥8, amber 6–7, red ≤5) — parsing exists, badge UI still pending
 - [ ] Add `--keywords` support to git_collector calls in the new handlers (currently using
   raw git log; the incident-report script produces richer structured JSON)
 - [ ] Tune prompts with HKJC service names, package prefixes, and known anti-patterns

@@ -47,6 +47,59 @@ from ii_bridge.prompts import (
 )
 from ii_bridge.fetcher import ContentType, FetchError, detect_content_type, fetch_file_method, fetch_commit_diff
 from ii_bridge.clickup_fetcher import fetch_clickup_task
+from ii_bridge.wiki_integration import (
+    WIKI_AVAILABLE,
+    parse_confidence_score,
+    synthesise_incident,
+    merge_incident_article,
+    write_incident_article,
+    _build_incident_slug,
+)
+
+
+# ── Wiki save helper ─────────────────────────────────────────────────────────
+
+async def _save_incident_to_wiki(
+    payload: dict,
+    report: str,
+    confidence_int: int,
+    analysis: str,
+) -> str:
+    """
+    Synthesise (or merge) a wiki article from the investigation report.
+    Returns a relative path string like "incidents/aop-1234.md".
+    """
+    mode      = (payload.get("mode") or "description").strip()
+    input_val = (payload.get("input") or "").strip()
+    ticket_id = input_val.upper() if mode == "clickup" else None
+
+    metadata = {
+        "analysis":   analysis,
+        "mode":       mode,
+        "ticket_id":  ticket_id,
+        "confidence": confidence_int,
+    }
+
+    slug = _build_incident_slug(ticket_id, analysis)
+
+    # Import wiki root lazily so import errors surface only at call time
+    try:
+        from wiki.index import _WIKI_DIR
+        wiki_root = _WIKI_DIR
+    except ImportError:
+        from pathlib import Path as _P
+        wiki_root = _P.home() / ".cache" / "squad-gps-radar" / "wiki"
+
+    existing_path = wiki_root / "incidents" / f"{slug}.md"
+
+    if existing_path.exists():
+        existing = existing_path.read_text(encoding="utf-8")
+        markdown = await merge_incident_article(existing, report, metadata)
+    else:
+        markdown = await synthesise_incident(report, metadata)
+
+    written = write_incident_article(slug, markdown)
+    return f"incidents/{written.name}"
 
 
 # ── Shared data-gathering pipeline ───────────────────────────────────────────
@@ -215,7 +268,31 @@ async def _handle_incident_mode(
 
     await ws.send(json.dumps({"type": "status", "text": "Analysing with Claude…"}))
     report = await _stream_claude_to_ws(ws, prompt, progress_event=progress_event)
-    await ws.send(json.dumps({"type": complete_event, "report": report}))
+
+    # ── Wiki save (confidence-gated) ──────────────────────────────────────────
+    analysis    = complete_event.replace("_complete", "")
+    conf        = parse_confidence_score(report) if WIKI_AVAILABLE else None
+    wiki_status = "skipped"
+    wiki_path   = None
+
+    if WIKI_AVAILABLE and conf is not None:
+        if conf >= 8:
+            await ws.send(json.dumps({"type": "status", "text": "Saving to wiki…"}))
+            try:
+                wiki_path   = await _save_incident_to_wiki(payload, report, conf, analysis)
+                wiki_status = "saved"
+            except Exception:
+                wiki_status = "skipped"
+        elif conf >= 6:
+            wiki_status = "prompt"
+
+    await ws.send(json.dumps({
+        "type":        complete_event,
+        "report":      report,
+        "wiki_status": wiki_status,
+        "wiki_path":   wiki_path,
+        "confidence":  conf,
+    }))
 
 
 # ── Public handlers ───────────────────────────────────────────────────────────
@@ -334,6 +411,32 @@ async def _handle_perf_advisor(ws, payload: dict) -> None:
     await ws.send(json.dumps({"type": "perf_advisor_complete", "report": report}))
 
 
+async def _handle_save_to_wiki(ws, payload: dict) -> None:
+    """
+    User-triggered wiki save for borderline-confidence reports (6–7/10).
+    Payload: { report, analysis, mode, input, confidence }
+    Emits: wiki_saved { wiki_path } or wiki_save_failed { message }
+    """
+    if not WIKI_AVAILABLE:
+        await ws.send(json.dumps({"type": "wiki_save_failed", "message": "Wiki module not available"}))
+        return
+
+    report = (payload.get("report") or "").strip()
+    if not report:
+        await ws.send(json.dumps({"type": "wiki_save_failed", "message": "No report in payload"}))
+        return
+
+    analysis   = (payload.get("analysis") or "fix_advisor").strip()
+    conf_int   = int(payload.get("confidence") or 7)
+
+    await ws.send(json.dumps({"type": "status", "text": "Saving to wiki…"}))
+    try:
+        wiki_path = await _save_incident_to_wiki(payload, report, conf_int, analysis)
+        await ws.send(json.dumps({"type": "wiki_saved", "wiki_path": wiki_path}))
+    except Exception as exc:
+        await ws.send(json.dumps({"type": "wiki_save_failed", "message": str(exc)}))
+
+
 async def _handle_extract_stacktrace_image(ws, payload: dict) -> None:
     from bridge_modules.shared import _run_in_executor
     from ii_bridge.image_extractor import ExtractionError, extract_stacktrace_from_image
@@ -361,4 +464,5 @@ HANDLERS = {
     "minimal_fix_report":        _handle_minimal_fix,
     "perf_advisor_report":       _handle_perf_advisor,
     "extract_stacktrace_image":  _handle_extract_stacktrace_image,
+    "save_to_wiki":              _handle_save_to_wiki,
 }
