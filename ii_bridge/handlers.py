@@ -99,6 +99,15 @@ async def _save_incident_to_wiki(
         markdown = await synthesise_incident(report, metadata)
 
     written = write_incident_article(slug, markdown)
+
+    # Semantic index — fire-and-forget; does not block the WS response
+    try:
+        import asyncio as _asyncio
+        from wiki.semantic import index_article_async as _idx
+        _asyncio.create_task(_idx(written))
+    except Exception:
+        pass  # semantic index is optional
+
     return f"incidents/{written.name}"
 
 
