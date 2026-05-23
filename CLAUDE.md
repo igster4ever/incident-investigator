@@ -14,12 +14,14 @@ open directly in a browser. Analysis is delegated to the GPS·ADR Radar bridge s
 | `ii_bridge/prompts.py` | Pure prompt builder functions — no I/O, fully unit-testable |
 | `ii_bridge/handlers.py` | WS handlers — data gathering + streaming to Claude API |
 | `ii_bridge/image_extractor.py` | Claude Haiku vision extraction of stack traces from images; `ExtractionError` |
-| `ii_bridge/clickup_fetcher.py` | ClickUp REST API client — fetches task name + description by custom task ID |
+| `ii_bridge/clickup_fetcher.py` | ClickUp REST API client — fetches task name + description by custom task ID; `reset_clickup_cache()` |
+| `ii_bridge/connectivity_handler.py` | `_handle_check_connectivity` (ping Slack + ClickUp), `_handle_update_token` (write token file, re-ping, emit status) |
 | `ii_bridge/fetcher.py` | Content-type detection; file/method + commit diff auto-fetch for Perf Advisor |
 | `ii_bridge/__init__.py` | Exports `HANDLERS` dict |
 | `tests/conftest.py` | Mock WS fixture + sys.path wiring |
 | `tests/test_prompts.py` | Prompt builder unit tests |
-| `tests/test_handlers.py` | Handler flow tests (mock WS) |
+| `tests/test_handlers.py` | Handler flow tests (mock WS); includes TestWikiSaveHandler + TestConfidenceGatedWikiSave |
+| `tests/test_connectivity_handler.py` | Connectivity handler unit tests — ping functions, status builders, async handlers |
 | `tests/test_image_extractor.py` | Image extractor unit tests |
 | `tests/test_fetcher.py` | Fetcher unit tests |
 | `tests/test_fix_advisor_aop5589.py` | Regression tests for Fix Advisor — AOP-5589 (OCA/ats-sportsbook); unit + integration |

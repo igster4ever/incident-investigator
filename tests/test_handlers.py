@@ -372,6 +372,169 @@ class TestExtractStacktraceImageHandler:
         assert mock_ws.last_of_type("stacktrace_extracted") is None
 
 
+# ── Wiki save handler ────────────────────────────────────────────────────────
+
+class TestWikiSaveHandler:
+    """Tests for _handle_save_to_wiki (user-triggered, borderline confidence path)."""
+
+    @pytest.mark.asyncio
+    async def test_wiki_unavailable_emits_save_failed(self, mock_ws):
+        with patch("ii_bridge.handlers.WIKI_AVAILABLE", False):
+            from ii_bridge.handlers import _handle_save_to_wiki
+            await _handle_save_to_wiki(mock_ws, {"report": "some report"})
+        msg = mock_ws.last_of_type("wiki_save_failed")
+        assert msg is not None
+        assert "not available" in msg["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_missing_report_emits_save_failed(self, mock_ws):
+        with patch("ii_bridge.handlers.WIKI_AVAILABLE", True):
+            from ii_bridge.handlers import _handle_save_to_wiki
+            await _handle_save_to_wiki(mock_ws, {"report": ""})
+        msg = mock_ws.last_of_type("wiki_save_failed")
+        assert msg is not None
+        assert "No report" in msg["message"]
+
+    @pytest.mark.asyncio
+    async def test_successful_save_emits_wiki_saved(self, mock_ws):
+        with (
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", True),
+            patch(
+                "ii_bridge.handlers._save_incident_to_wiki",
+                new_callable=AsyncMock,
+                return_value="incidents/aop-1234.md",
+            ),
+        ):
+            from ii_bridge.handlers import _handle_save_to_wiki
+            await _handle_save_to_wiki(mock_ws, {
+                "report": "Confidence: 7/10\nRoot cause: cache miss",
+                "analysis": "fix_advisor",
+                "confidence": 7,
+            })
+        msg = mock_ws.last_of_type("wiki_saved")
+        assert msg is not None
+        assert msg["wiki_path"] == "incidents/aop-1234.md"
+
+    @pytest.mark.asyncio
+    async def test_save_exception_emits_save_failed(self, mock_ws):
+        with (
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", True),
+            patch(
+                "ii_bridge.handlers._save_incident_to_wiki",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("disk full"),
+            ),
+        ):
+            from ii_bridge.handlers import _handle_save_to_wiki
+            await _handle_save_to_wiki(mock_ws, {
+                "report": "some report",
+                "confidence": 7,
+            })
+        msg = mock_ws.last_of_type("wiki_save_failed")
+        assert msg is not None
+        assert "disk full" in msg["message"]
+
+    @pytest.mark.asyncio
+    async def test_defaults_analysis_to_fix_advisor(self, mock_ws):
+        save_mock = AsyncMock(return_value="incidents/anon.md")
+        with (
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", True),
+            patch("ii_bridge.handlers._save_incident_to_wiki", save_mock),
+        ):
+            from ii_bridge.handlers import _handle_save_to_wiki
+            await _handle_save_to_wiki(mock_ws, {"report": "report text"})
+        _, _, _, analysis = save_mock.call_args.args
+        assert analysis == "fix_advisor"
+
+
+class TestConfidenceGatedWikiSave:
+    """Tests for the wiki save path embedded in _handle_incident_mode."""
+
+    @pytest.mark.asyncio
+    async def test_high_confidence_auto_saves(self, mock_ws):
+        report = "Confidence: 9/10\nRoot cause determined."
+        save_mock = AsyncMock(return_value="incidents/auto.md")
+        with (
+            _make_no_token_patch(),
+            _make_executor_patch(),
+            _make_stream_patch(return_value=report),
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", True),
+            patch("ii_bridge.handlers.parse_confidence_score", return_value=9),
+            patch("ii_bridge.handlers._save_incident_to_wiki", save_mock),
+        ):
+            await _handle_fix_advisor(mock_ws, {"mode": "description", "input": "crash in prod"})
+
+        complete = mock_ws.last_of_type("fix_advisor_complete")
+        assert complete is not None
+        assert complete["wiki_status"] == "saved"
+        assert complete["wiki_path"] == "incidents/auto.md"
+        save_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_borderline_confidence_returns_prompt_status(self, mock_ws):
+        report = "Confidence: 7/10\nPartial analysis."
+        with (
+            _make_no_token_patch(),
+            _make_executor_patch(),
+            _make_stream_patch(return_value=report),
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", True),
+            patch("ii_bridge.handlers.parse_confidence_score", return_value=7),
+        ):
+            await _handle_fix_advisor(mock_ws, {"mode": "description", "input": "slow query"})
+
+        complete = mock_ws.last_of_type("fix_advisor_complete")
+        assert complete is not None
+        assert complete["wiki_status"] == "prompt"
+        assert complete["wiki_path"] is None
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_skips_wiki(self, mock_ws):
+        report = "Confidence: 4/10\nInsufficient evidence."
+        with (
+            _make_no_token_patch(),
+            _make_executor_patch(),
+            _make_stream_patch(return_value=report),
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", True),
+            patch("ii_bridge.handlers.parse_confidence_score", return_value=4),
+        ):
+            await _handle_fix_advisor(mock_ws, {"mode": "description", "input": "vague issue"})
+
+        complete = mock_ws.last_of_type("fix_advisor_complete")
+        assert complete is not None
+        assert complete["wiki_status"] == "skipped"
+        assert complete["wiki_path"] is None
+
+    @pytest.mark.asyncio
+    async def test_wiki_unavailable_skips_silently(self, mock_ws):
+        with (
+            _make_no_token_patch(),
+            _make_executor_patch(),
+            _make_stream_patch(),
+            patch("ii_bridge.handlers.WIKI_AVAILABLE", False),
+        ):
+            await _handle_fix_advisor(mock_ws, {"mode": "description", "input": "some issue"})
+
+        complete = mock_ws.last_of_type("fix_advisor_complete")
+        assert complete is not None
+        assert complete["wiki_status"] == "skipped"
+        assert complete["confidence"] is None
+
+    @pytest.mark.asyncio
+    async def test_perf_advisor_complete_has_no_wiki_fields(self, mock_ws):
+        with (
+            _make_no_token_patch(),
+            _make_executor_patch(),
+            _make_stream_patch(),
+        ):
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "slow query"})
+
+        complete = mock_ws.last_of_type("perf_advisor_complete")
+        assert complete is not None
+        assert "wiki_status" not in complete
+        assert "wiki_path" not in complete
+        assert "confidence" not in complete
+
+
 # ── HANDLERS dict ─────────────────────────────────────────────────────────────
 
 class TestHandlersDict:

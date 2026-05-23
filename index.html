@@ -212,6 +212,53 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 #wiki-save-chip { display: none; align-items: center; gap: 6px; }
 #wiki-conf-text { font-size: 10px; color: #94a3b8; }
 
+/* ── Connections strip ── */
+#conn-strip { margin-top: 8px; border: 1px solid #1e293b; border-radius: 5px; overflow: hidden; }
+#conn-strip-header {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 10px; cursor: pointer; user-select: none;
+  font-size: 10px; color: #64748b; background: #0a1424;
+}
+#conn-strip-header:hover { color: #94a3b8; }
+#conn-strip-body { display: none; padding: 8px 12px 10px; background: #080f1a; }
+#conn-strip.open #conn-strip-body { display: block; }
+.conn-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.conn-row:last-child { margin-bottom: 0; }
+.conn-label { font-size: 10px; color: #64748b; min-width: 54px; padding-top: 2px; }
+.int-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: #334155; flex-shrink: 0; margin-top: 4px;
+}
+.int-dot.ok      { background: #22c55e; }
+.int-dot.err     { background: #ef4444; }
+.int-dot.no-tok  { background: #f59e0b; }
+.conn-status-text { font-size: 10px; color: #64748b; padding-top: 2px; }
+.conn-token-wrap { display: flex; gap: 5px; align-items: center; margin-top: 4px; width: 100%; }
+.conn-token-input {
+  flex: 1; max-width: 280px; background: #0d1b2e; border: 1px solid #1e293b;
+  color: #94a3b8; border-radius: 3px; padding: 3px 7px; font-size: 10px;
+  font-family: inherit;
+}
+.conn-token-input:focus { outline: none; border-color: #3b82f6; }
+.conn-update-btn {
+  padding: 3px 9px; background: none; border: 1px solid #1e293b;
+  color: #64748b; border-radius: 3px; font-size: 10px; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+}
+.conn-update-btn:hover:not(:disabled) { border-color: #334155; color: #94a3b8; }
+.conn-update-btn:disabled { opacity: .4; cursor: default; }
+.conn-err-text { font-size: 9px; color: #ef4444; margin-top: 2px; width: 100%; }
+#conn-check-btn {
+  margin-top: 8px; padding: 3px 10px; background: none;
+  border: 1px solid #1e293b; color: #475569; border-radius: 3px;
+  font-size: 10px; cursor: pointer; font-family: inherit;
+}
+#conn-check-btn:hover { border-color: #334155; color: #64748b; }
+#conn-summary-dot { width: 6px; height: 6px; border-radius: 50%; background: #334155; flex-shrink: 0; }
+#conn-summary-dot.ok     { background: #22c55e; }
+#conn-summary-dot.err    { background: #ef4444; }
+#conn-summary-dot.no-tok { background: #f59e0b; }
+
 /* ── Token gate ── */
 #token-gate {
   position: fixed; inset: 0; background: rgba(5,12,22,.95);
@@ -335,6 +382,45 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
     <div id="custom-colors">
       Custom: <label>Text <input type="color" id="custom-text-color" value="#e2e8f0" oninput="iiSetCustomTheme()"></label>
       <label>BG <input type="color" id="custom-bg-color"  value="#050d18" oninput="iiSetCustomTheme()"></label>
+    </div>
+  </div>
+
+  <!-- ── Connections strip ── -->
+  <div id="conn-strip">
+    <div id="conn-strip-header" onclick="document.getElementById('conn-strip').classList.toggle('open')">
+      <span id="conn-summary-dot"></span>
+      <span>&#9889; Connections</span>
+    </div>
+    <div id="conn-strip-body">
+      <div class="conn-row" id="conn-row-slack">
+        <span class="int-dot" id="int-dot-slack"></span>
+        <span class="conn-label">Slack</span>
+        <div style="flex:1">
+          <span class="conn-status-text" id="conn-text-slack">Checking…</span>
+          <div class="conn-token-wrap" id="conn-token-slack" style="display:none">
+            <input class="conn-token-input" id="conn-input-slack" type="password"
+              placeholder="xoxb-…" oninput="iiConnTokenInput('slack')">
+            <button class="conn-update-btn" id="conn-btn-slack" disabled
+              onclick="iiUpdateToken('slack')">Update</button>
+          </div>
+          <div class="conn-err-text" id="conn-err-slack" style="display:none"></div>
+        </div>
+      </div>
+      <div class="conn-row" id="conn-row-clickup">
+        <span class="int-dot" id="int-dot-clickup"></span>
+        <span class="conn-label">ClickUp</span>
+        <div style="flex:1">
+          <span class="conn-status-text" id="conn-text-clickup">Checking…</span>
+          <div class="conn-token-wrap" id="conn-token-clickup" style="display:none">
+            <input class="conn-token-input" id="conn-input-clickup" type="password"
+              placeholder="pk_…" oninput="iiConnTokenInput('clickup')">
+            <button class="conn-update-btn" id="conn-btn-clickup" disabled
+              onclick="iiUpdateToken('clickup')">Update</button>
+          </div>
+          <div class="conn-err-text" id="conn-err-clickup" style="display:none"></div>
+        </div>
+      </div>
+      <button id="conn-check-btn" onclick="_send('check_connectivity', {})">&#8635; Check</button>
     </div>
   </div>
 
@@ -497,6 +583,7 @@ function _connect() {
   _ws.onopen = function() {
     _setConnStatus('connected');
     if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
+    _send('check_connectivity', {});
   };
 
   _ws.onclose = function() {
@@ -610,6 +697,25 @@ function _dispatch(msg) {
     var imgStat2 = document.getElementById('img-status');
     if (imgStat2) imgStat2.textContent = '⚠ ' + (msg.message || 'Extraction failed');
     _imgExtracting = false;
+    return;
+  }
+
+  if (type === 'connectivity_status') {
+    _renderConnStatus(msg.slack, msg.clickup);
+    return;
+  }
+
+  if (type === 'token_updated') {
+    var intg = msg.integration || '';
+    if (msg.ok) {
+      var errEl = document.getElementById('conn-err-' + intg);
+      if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+      var inp = document.getElementById('conn-input-' + intg);
+      if (inp) inp.value = '';
+    } else {
+      var errEl2 = document.getElementById('conn-err-' + intg);
+      if (errEl2) { errEl2.textContent = msg.error || 'Update failed'; errEl2.style.display = ''; }
+    }
     return;
   }
 
@@ -739,6 +845,61 @@ window.iiSetAnalysis = function(mode) {
 
 window.iiToggleSlack = function(enabled) {
   _slackEnabled = !!enabled;
+};
+
+// ── Connections strip ────────────────────────────────────────────────────────
+function _renderConnStatus(slack, clickup) {
+  _renderIntStatus('slack',   slack);
+  _renderIntStatus('clickup', clickup);
+  // summary dot in header = worst status
+  var dot = document.getElementById('conn-summary-dot');
+  if (!dot) return;
+  dot.className = '';
+  if ((!slack || !slack.ok) && slack && !slack.token_set) { dot.className = 'no-tok'; }
+  else if ((!clickup || !clickup.ok) && clickup && !clickup.token_set) { dot.className = 'no-tok'; }
+  else if (!slack || !slack.ok || !clickup || !clickup.ok) { dot.className = 'err'; }
+  else { dot.className = 'ok'; }
+}
+
+function _renderIntStatus(id, status) {
+  var dotEl  = document.getElementById('int-dot-' + id);
+  var txtEl  = document.getElementById('conn-text-' + id);
+  var tokDiv = document.getElementById('conn-token-' + id);
+  var errEl  = document.getElementById('conn-err-' + id);
+  if (!dotEl || !txtEl) return;
+
+  if (!status) {
+    dotEl.className = 'int-dot';
+    txtEl.textContent = 'Unknown';
+    return;
+  }
+
+  dotEl.className = 'int-dot ' + (status.ok ? 'ok' : (status.token_set ? 'err' : 'no-tok'));
+
+  if (status.ok) {
+    txtEl.textContent = 'Connected';
+    if (tokDiv) tokDiv.style.display = 'none';
+    if (errEl)  { errEl.textContent = ''; errEl.style.display = 'none'; }
+  } else if (!status.token_set) {
+    txtEl.textContent = 'No token';
+    if (tokDiv) tokDiv.style.display = 'flex';
+  } else {
+    txtEl.textContent = status.error || 'Error';
+    if (tokDiv) tokDiv.style.display = 'flex';
+  }
+}
+
+window.iiConnTokenInput = function(id) {
+  var inp = document.getElementById('conn-input-' + id);
+  var btn = document.getElementById('conn-btn-'   + id);
+  if (btn) btn.disabled = !inp || !inp.value.trim();
+};
+
+window.iiUpdateToken = function(id) {
+  var inp = document.getElementById('conn-input-' + id);
+  var tok = inp ? inp.value.trim() : '';
+  if (!tok) return;
+  _send('update_token', { integration: id, token: tok });
 };
 
 window.iiSetDepth = function(depth) {

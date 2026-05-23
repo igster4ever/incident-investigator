@@ -18,6 +18,22 @@ _NO_TOOLS_PREAMBLE = (
     "call any tools, fetch URLs, read files, or query external systems.\n\n"
 )
 
+def _build_stacktrace_header(parsed: dict) -> str:
+    exception_type = (parsed.get("primary_exception") or {}).get("type", "Unknown")
+    exception_msg  = (parsed.get("primary_exception") or {}).get("message", "")
+    services       = parsed.get("affected_services") or []
+    frames         = [
+        f.get("class_method", "")
+        for f in (parsed.get("all_project_frames") or [])[:5]
+    ]
+    return (
+        f"## Exception: {exception_type}\n"
+        f"Message: {exception_msg}\n"
+        f"Affected services: {', '.join(services) or 'unknown'}\n"
+        f"Top project frames: {', '.join(f for f in frames if f) or 'none'}\n\n"
+    )
+
+
 # ── Fix Advisor prompts ───────────────────────────────────────────────────────
 
 _FIX_ADVISOR_TASK = """\
@@ -90,20 +106,10 @@ def fix_advisor_stacktrace(
     code_ctx: str,
     git_ctx: str,
 ) -> str:
-    exception_type = (parsed.get("primary_exception") or {}).get("type", "Unknown")
-    exception_msg  = (parsed.get("primary_exception") or {}).get("message", "")
-    services       = parsed.get("affected_services") or []
-    frames         = [
-        f.get("class_method", "")
-        for f in (parsed.get("all_project_frames") or [])[:5]
-    ]
     return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on how to fix a Java exception.\n\n"
-        f"## Exception: {exception_type}\n"
-        f"Message: {exception_msg}\n"
-        f"Affected services: {', '.join(services) or 'unknown'}\n"
-        f"Top project frames: {', '.join(f for f in frames if f) or 'none'}\n\n"
-        f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
+        + _build_stacktrace_header(parsed)
+        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
         f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
         f"## Raw stack trace (first 40 lines):\n"
         f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"
@@ -185,20 +191,10 @@ def minimal_fix_stacktrace(
     code_ctx: str,
     git_ctx: str,
 ) -> str:
-    exception_type = (parsed.get("primary_exception") or {}).get("type", "Unknown")
-    exception_msg  = (parsed.get("primary_exception") or {}).get("message", "")
-    services       = parsed.get("affected_services") or []
-    frames         = [
-        f.get("class_method", "")
-        for f in (parsed.get("all_project_frames") or [])[:5]
-    ]
     return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead advising on the smallest safe fix for a Java exception.\n\n"
-        f"## Exception: {exception_type}\n"
-        f"Message: {exception_msg}\n"
-        f"Affected services: {', '.join(services) or 'unknown'}\n"
-        f"Top project frames: {', '.join(f for f in frames if f) or 'none'}\n\n"
-        f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
+        + _build_stacktrace_header(parsed)
+        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
         f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
         f"## Raw stack trace (first 40 lines):\n"
         f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"
@@ -319,20 +315,10 @@ def perf_advisor_stacktrace_prompt(
     git_ctx: str,
     depth: str = "standard",
 ) -> str:
-    exception_type = (parsed.get("primary_exception") or {}).get("type", "Unknown")
-    exception_msg  = (parsed.get("primary_exception") or {}).get("message", "")
-    services       = parsed.get("affected_services") or []
-    frames         = [
-        f.get("class_method", "")
-        for f in (parsed.get("all_project_frames") or [])[:5]
-    ]
     return _NO_TOOLS_PREAMBLE + (
         f"You are a senior engineering lead identifying performance bottlenecks from a Java stack trace.\n\n"
-        f"## Exception: {exception_type}\n"
-        f"Message: {exception_msg}\n"
-        f"Affected services: {', '.join(services) or 'unknown'}\n"
-        f"Top project frames: {', '.join(f for f in frames if f) or 'none'}\n\n"
-        f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
+        + _build_stacktrace_header(parsed)
+        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
         f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
         f"## Raw stack trace (first 40 lines):\n"
         f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"

@@ -47,6 +47,7 @@ from ii_bridge.prompts import (
 )
 from ii_bridge.fetcher import ContentType, FetchError, detect_content_type, fetch_file_method, fetch_commit_diff
 from ii_bridge.clickup_fetcher import fetch_clickup_task
+from ii_bridge.connectivity_handler import _handle_check_connectivity, _handle_update_token
 from ii_bridge.wiki_integration import (
     WIKI_AVAILABLE,
     parse_confidence_score,
@@ -111,6 +112,13 @@ async def _save_incident_to_wiki(
     return f"incidents/{written.name}"
 
 
+def _format_slack_results(results: list, max_text: int = 200, max_items: int = 10) -> str:
+    return "\n".join(
+        f"[{r.get('channel', '?')}] {r.get('text', '')[:max_text]}"
+        for r in results[:max_items]
+    )
+
+
 # ── Shared data-gathering pipeline ───────────────────────────────────────────
 
 async def _gather_clickup(
@@ -138,10 +146,7 @@ async def _gather_clickup(
             await ws.send(json.dumps({"type": "status", "text": f"Searching Slack for {ticket_id}…"}))
             results = await _run_in_executor(_slack_search_channels, token, ticket_id)
             if results:
-                slack_text = "\n".join(
-                    f"[{r.get('channel','?')}] {r.get('text','')[:200]}"
-                    for r in results[:10]
-                )
+                slack_text = _format_slack_results(results)
         except Exception:
             await ws.send(json.dumps({"type": "status", "text": "Slack search failed — continuing without it"}))
     elif not slack_enabled:
@@ -189,10 +194,7 @@ async def _gather_description(ws, description: str, token: str | None) -> tuple[
         for kw in keywords[:2]:
             results = await _run_in_executor(_slack_search_channels, token, kw)
             if results:
-                slack_text += "\n".join(
-                    f"[{r.get('channel','?')}] {r.get('text','')[:150]}"
-                    for r in results[:5]
-                ) + "\n"
+                slack_text += _format_slack_results(results, max_text=150, max_items=5) + "\n"
 
     git_text = ""
     if keywords:
@@ -474,4 +476,6 @@ HANDLERS = {
     "perf_advisor_report":       _handle_perf_advisor,
     "extract_stacktrace_image":  _handle_extract_stacktrace_image,
     "save_to_wiki":              _handle_save_to_wiki,
+    "check_connectivity":        _handle_check_connectivity,
+    "update_token":              _handle_update_token,
 }

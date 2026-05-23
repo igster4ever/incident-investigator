@@ -64,6 +64,12 @@ def _get_team_id(token: str) -> str:
     return _CACHE_TEAM_ID
 
 
+def reset_clickup_cache() -> None:
+    """Clear the cached team ID — call after writing a new ClickUp token."""
+    global _CACHE_TEAM_ID
+    _CACHE_TEAM_ID = None
+
+
 def fetch_clickup_task(ticket_id: str) -> str | None:
     """
     Fetch task name + description for a custom task ID (e.g. "AOP-5035").
