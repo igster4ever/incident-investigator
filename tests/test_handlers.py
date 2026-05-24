@@ -123,6 +123,19 @@ class TestFixAdvisorHandler:
         complete = mock_ws.last_of_type("fix_advisor_complete")
         assert complete is not None
 
+    @pytest.mark.asyncio
+    async def test_unknown_mode_emits_warning_and_still_completes(self, mock_ws):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch("fallback report"):
+            await _handle_fix_advisor(mock_ws, {"mode": "UNKNOWN_MODE", "input": "some input"})
+
+        warning = next(
+            (m for m in mock_ws.sent if m.get("type") == "status"
+             and "unknown" in m.get("text", "").lower()),
+            None,
+        )
+        assert warning is not None, "Expected a warning status event for unknown mode"
+        assert mock_ws.last_of_type("fix_advisor_complete") is not None
+
 
 # ── Minimal Fix ───────────────────────────────────────────────────────────────
 

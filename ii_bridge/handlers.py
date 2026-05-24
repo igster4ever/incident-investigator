@@ -54,8 +54,12 @@ from ii_bridge.wiki_integration import (
     synthesise_incident,
     merge_incident_article,
     write_incident_article,
+    load_existing_article,
     _build_incident_slug,
 )
+
+# Strong references to fire-and-forget background tasks; prevents silent GC.
+_BACKGROUND_TASKS: set = set()
 
 
 # ── Wiki save helper ─────────────────────────────────────────────────────────
@@ -83,18 +87,8 @@ async def _save_incident_to_wiki(
 
     slug = _build_incident_slug(ticket_id, analysis)
 
-    # Import wiki root lazily so import errors surface only at call time
-    try:
-        from wiki.index import _WIKI_DIR
-        wiki_root = _WIKI_DIR
-    except ImportError:
-        from pathlib import Path as _P
-        wiki_root = _P.home() / ".cache" / "squad-gps-radar" / "wiki"
-
-    existing_path = wiki_root / "incidents" / f"{slug}.md"
-
-    if existing_path.exists():
-        existing = existing_path.read_text(encoding="utf-8")
+    existing = load_existing_article(slug)
+    if existing is not None:
         markdown = await merge_incident_article(existing, report, metadata)
     else:
         markdown = await synthesise_incident(report, metadata)
@@ -105,7 +99,9 @@ async def _save_incident_to_wiki(
     try:
         import asyncio as _asyncio
         from wiki.semantic import index_article_async as _idx
-        _asyncio.create_task(_idx(written))
+        _task = _asyncio.create_task(_idx(written))
+        _BACKGROUND_TASKS.add(_task)
+        _task.add_done_callback(_BACKGROUND_TASKS.discard)
     except Exception:
         pass  # semantic index is optional
 
@@ -270,6 +266,10 @@ async def _handle_incident_mode(
             prompt = prompt_fns["stacktrace"](input_val, parsed, code_ctx, git_ctx)
 
         else:
+            await ws.send(json.dumps({
+                "type": "status",
+                "text": f"Warning: unknown input mode '{mode}' — falling back to description",
+            }))
             slack_text, git_text = await _gather_description(ws, input_val, token)
             prompt = prompt_fns["description"](input_val, slack_text, git_text)
 

@@ -193,6 +193,37 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .wh-body a:hover { text-decoration: underline; }
 .wh-loading { color: #334155; font-size: 11px; font-style: italic; padding: 8px 0; }
 .wh-err,.wiki-err { color: #f87171; font-size: 11px; padding: 8px 0; }
+.wh-none { color: #334155; font-size: 11px; font-style: italic; padding: 4px 0; }
+
+/* ── Related incidents panel ── */
+#related-incidents { margin-top: 18px; border-top: 1px solid #1e293b; padding-top: 12px; }
+.ri-heading { font-size: 10px; font-weight: 600; color: #475569; text-transform: uppercase;
+              letter-spacing: .06em; margin-bottom: 8px; }
+.wh-related-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.wh-related-item { display: flex; align-items: flex-start; gap: 8px; }
+.wh-related-score { font-size: 9px; font-family: 'JetBrains Mono','Fira Code',monospace;
+                    color: #6366f1; min-width: 26px; text-align: right; padding-top: 2px; }
+.wh-related-body  { flex: 1; min-width: 0; }
+.wh-related-title { display: block; font-size: 11px; color: #94a3b8; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+.wh-related-snippet { display: block; font-size: 10px; color: #334155; margin-top: 1px;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Report badges ── */
+#report-badges { display: none; align-items: center; gap: 6px; }
+.rb { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 3px;
+      font-size: 10px; font-family: 'JetBrains Mono','Fira Code',monospace; font-weight: 600; }
+.rb-label { font-size: 9px; color: #475569; margin-right: 4px; font-weight: 400; font-family: inherit; }
+.rb-conf-hi  { background: #14532d; color: #4ade80; }
+.rb-conf-mid { background: #713f12; color: #fbbf24; }
+.rb-conf-lo  { background: #7f1d1d; color: #f87171; }
+.rb-effort-sm { background: #14532d; color: #4ade80; }
+.rb-effort-md { background: #713f12; color: #fbbf24; }
+.rb-effort-lg { background: #7c2d12; color: #fb923c; }
+.rb-risk-lo   { background: #14532d; color: #4ade80; }
+.rb-risk-mid  { background: #713f12; color: #fbbf24; }
+.rb-risk-hi   { background: #7c2d12; color: #fb923c; }
+.rb-risk-crit { background: #7f1d1d; color: #f87171; }
 
 /* ── Footer ── */
 #footer {
@@ -442,6 +473,7 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   <!-- ── Output ── -->
   <div id="output-wrap">
     <pre id="output"><span style="color:#334155;font-style:italic">
+
   ┌───────────────────────────────────────────────────────────────────┐
   │  Select an analysis mode and input type, enter your data,        │
   │  and click ▶ Generate.                                           │
@@ -459,6 +491,10 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   │                   Quick / Standard / Deep dive tiers              │
   └───────────────────────────────────────────────────────────────────┘
 </span></pre>
+    <div id="related-incidents" style="display:none">
+      <p class="ri-heading">Related incidents</p>
+      <div id="related-incidents-body"></div>
+    </div>
   </div>
 
   <!-- ── Wiki panel (HTMX target) ── -->
@@ -468,6 +504,7 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 
   <!-- ── Footer ── -->
   <div id="footer">
+    <div id="report-badges"></div>
     <button id="followup-btn" class="act-btn primary" onclick="iiFollowUp()" style="display:none">&#128295; Code Change Suggestions</button>
     <button id="save-btn"     class="act-btn"         onclick="iiSave()"     style="display:none">&#8659; Save .md</button>
     <span id="followup-status"></span>
@@ -766,6 +803,20 @@ function _onComplete(report, msg) {
 
   _enableGenBtn();
   _setStatus('✓ Done');
+  _renderReportBadges(report, msg && msg.confidence);
+
+  // ── Related incidents (Session K) ─────────────────────────────────────────
+  var ri = document.getElementById('related-incidents');
+  var rib = document.getElementById('related-incidents-body');
+  if (ri && rib && report) {
+    var q = encodeURIComponent((_getInput() || '').substring(0, 200));
+    if (q) {
+      rib.innerHTML = '<p class="wh-loading">Finding related incidents…</p>';
+      ri.style.display = '';
+      htmx.ajax('GET', 'http://localhost:7432/wiki/related-html?axes=incidents&limit=5&q=' + q,
+        {target: '#related-incidents-body', swap: 'innerHTML'});
+    }
+  }
 
   var mode  = _MODES[_analysis];
   var fb    = document.getElementById('followup-btn');
@@ -788,6 +839,53 @@ function _onComplete(report, msg) {
     _showWikiChip('Confidence ' + conf + '/10 — save to wiki?');
   }
   // 'skipped' or missing: no wiki UI shown
+}
+
+// ── Report badge helpers ─────────────────────────────────────────────────────
+
+function _parseEffort(report) {
+  var m = report.match(/\bEffort[^]{0,60}\b(XS|XL|[SML])\b/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+function _parseRisk(report) {
+  var m = report.match(/\bRisk[^]{0,80}\b(Critical|High|Medium|Low)\b/i);
+  return m ? m[1] : null;
+}
+
+function _effortClass(e) {
+  return (e === 'XS' || e === 'S') ? 'rb-effort-sm' : (e === 'M') ? 'rb-effort-md' : 'rb-effort-lg';
+}
+
+function _riskClass(r) {
+  if (!r) return '';
+  var l = r.toLowerCase();
+  return l === 'critical' ? 'rb-risk-crit' : l === 'high' ? 'rb-risk-hi' : l === 'medium' ? 'rb-risk-mid' : 'rb-risk-lo';
+}
+
+function _renderReportBadges(report, conf) {
+  var el = document.getElementById('report-badges');
+  if (!el) return;
+
+  var html = '';
+
+  if (conf !== null && conf !== undefined) {
+    var cls = conf >= 8 ? 'rb-conf-hi' : conf >= 6 ? 'rb-conf-mid' : 'rb-conf-lo';
+    html += '<span class="rb ' + cls + '"><span class="rb-label">conf</span>' + conf + '/10</span>';
+  }
+
+  var effort = _parseEffort(report);
+  if (effort) {
+    html += '<span class="rb ' + _effortClass(effort) + '"><span class="rb-label">effort</span>' + effort + '</span>';
+  }
+
+  var risk = _parseRisk(report);
+  if (risk) {
+    html += '<span class="rb ' + _riskClass(risk) + '"><span class="rb-label">risk</span>' + risk + '</span>';
+  }
+
+  el.innerHTML = html;
+  el.style.display = html ? 'flex' : 'none';
 }
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
@@ -967,6 +1065,12 @@ window.iiGenerate = function() {
 
   var out = document.getElementById('output');
   if (out) { out.textContent = ''; _applyTheme(); }
+
+  var ri = document.getElementById('related-incidents');
+  if (ri) ri.style.display = 'none';
+
+  var rb = document.getElementById('report-badges');
+  if (rb) { rb.innerHTML = ''; rb.style.display = 'none'; }
 
   var btn = document.getElementById('gen-btn');
   if (btn) btn.disabled = true;
