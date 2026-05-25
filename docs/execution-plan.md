@@ -410,7 +410,7 @@ the article write paths.
 
 **Tech decisions (2026-05-22):**
 - **Store:** LanceDB (file-backed, in-process, native hybrid search via Tantivy + HNSW)
-- **Embedder:** Voyage AI `voyage-3-lite` (512-dim, async client, same API key as Claude)
+- **Embedder:** Voyage AI `voyage-4-lite` (512-dim, async client, same API key as Claude)
 - **Hybrid mode:** RRF re-ranking (vector + FTS in a single LanceDB query)
 - **Existing FTS5 (`wiki/fts.db`) unchanged** — keyword `POST /wiki/search` stays as-is;
   semantic layer is strictly additive
