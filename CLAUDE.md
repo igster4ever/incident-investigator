@@ -83,6 +83,10 @@ may hold a different token than the running process. When auth fails, verify wit
 as a belt-and-braces instruction. Both layers are required: `--allowedTools ""` (empty string)
 is silently ignored by the CLI.
 
+**Voyage API key** — semantic search requires `VOYAGE_API_KEY`. The bridge loads it from
+`~/.claude/skills/shared/.voyage_token` at startup. In raw shell sessions (no bridge),
+set it explicitly before calling `build_semantic_index()` or `search_semantic()`.
+
 **ClickUp token** — store at `~/.claude/skills/shared/.clickup_token` (chmod 600) or set
 `CLICKUP_TOKEN` env var. `clickup_fetcher.py` degrades to `None` on any failure — missing
 token is not an error. Custom task IDs (e.g. `AOP-5035`) require `?custom_task_ids=true&team_id=`.
