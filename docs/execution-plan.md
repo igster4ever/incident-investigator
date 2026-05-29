@@ -393,12 +393,17 @@ Not a prerequisite for any other phase.
 ### Tasks
 - [x] Parse confidence score from markdown output (`Confidence: N/10`) — done in Session H
   (`wiki/incident_synthesis.py::parse_confidence_score`); used for wiki-save gating
-- [ ] Render confidence as a coloured score badge in the footer after generation
-  (green ≥8, amber 6–7, red ≤5) — parsing exists, badge UI still pending
-- [ ] Add `--keywords` support to git_collector calls in the new handlers (currently using
-  raw git log; the incident-report script produces richer structured JSON)
-- [ ] Tune prompts with HKJC service names, package prefixes, and known anti-patterns
-- [ ] Add "Regenerate" button that re-runs without clearing the previous output (side-by-side diff)
+- [x] Render confidence as a coloured score badge in the footer after generation
+  (green ≥8, amber 6–7, red ≤5) — shipped in Session K (commit b76e6a0); effort+risk badges also added
+- [x] Add `--keywords` support to git_collector calls in the new handlers — `_run_git_collector()`
+  helper in handlers.py; structured JSON with services_touched; replaces `_git_log_for_keyword` in clickup + description modes
+- [x] Tune prompts with HKJC platform context — `_HKJC_PLATFORM_CONTEXT` block injected into
+  Fix Advisor + Minimal Fix task templates; covers monorepo layout (`app/ats-*/`, `lib/`),
+  and six anti-patterns (DTO mapping, caching, DAO, Kafka, Redis, RestController)
+- [x] Add "Regenerate" button + run history — `_runHistory[]` tracks all runs per session;
+  strip above output shows chips (Run N · mode · HH:MM) once ≥2 runs exist; clicking a chip
+  rewinds to that run's output; "Fork from here" restores that run's inputs for re-submission;
+  "Regenerate" re-runs current inputs
 
 ---
 

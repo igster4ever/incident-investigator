@@ -29,7 +29,10 @@ Python's module cache means there is no runtime cost after the first call.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+from pathlib import Path
 
 from ii_bridge.prompts import (
     fix_advisor_clickup,
@@ -57,6 +60,9 @@ from ii_bridge.wiki_integration import (
     load_existing_article,
     _build_incident_slug,
 )
+
+_REPO_PATH = Path(os.environ.get("GPS_DEFAULT_REPO") or Path.home() / "Documents" / "GitHub" / "be-hkjc-mono")
+_GIT_COLLECTOR = Path.home() / ".claude" / "skills" / "incident-report" / "scripts" / "git_collector.py"
 
 # Strong references to fire-and-forget background tasks; prevents silent GC.
 _BACKGROUND_TASKS: set = set()
@@ -115,6 +121,45 @@ def _format_slack_results(results: list, max_text: int = 200, max_items: int = 1
     )
 
 
+# ── Git collector ────────────────────────────────────────────────────────────
+
+def _run_git_collector(primary: str, keywords: list[str] | tuple = (), days: int = 30) -> str:
+    """Call git_collector.py and return a formatted text summary.
+
+    primary   — ticket ID or leading keyword (positional arg to git_collector)
+    keywords  — additional --keywords terms (e.g. service names, class names)
+    Falls back to empty string if the script or repo is unavailable.
+    """
+    if not _GIT_COLLECTOR.exists() or not _REPO_PATH.exists():
+        return ""
+    cmd = [
+        "python3", str(_GIT_COLLECTOR), primary,
+        "--repo", str(_REPO_PATH),
+        "--days", str(days),
+    ]
+    if keywords:
+        cmd += ["--keywords", *keywords]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        data = json.loads(result.stdout)
+    except Exception:
+        return ""
+
+    commits = data.get("commits", [])
+    if not commits:
+        return f"No commits found referencing '{primary}' in the last {days} days."
+
+    services = data.get("services_touched", [])
+    lines = [f"Git history (last {days} days) — {len(commits)} commit(s)"]
+    if services:
+        lines.append(f"Services touched: {', '.join(services)}")
+    for c in commits[:15]:
+        svc = f" [{', '.join(c['services'])}]" if c.get("services") else ""
+        kw = f" (via: {c['matched_keyword']})" if c.get("matched_keyword") else ""
+        lines.append(f"  {c['hash']} | {c['date']} | {c['author']} | {c['message']}{svc}{kw}")
+    return "\n".join(lines)
+
+
 # ── Shared data-gathering pipeline ───────────────────────────────────────────
 
 async def _gather_clickup(
@@ -126,7 +171,6 @@ async def _gather_clickup(
 ) -> tuple[str, str, str]:
     """Returns (task_content, slack_text, git_text). Any source may be empty on failure."""
     from bridge_modules.shared import _run_in_executor
-    from bridge_modules.triage_handlers import _git_log_for_keyword
 
     # ── ClickUp task content ────────────────────────────────────────────────
     await ws.send(json.dumps({"type": "status", "text": f"Fetching ClickUp task {ticket_id}…"}))
@@ -148,9 +192,9 @@ async def _gather_clickup(
     elif not slack_enabled:
         await ws.send(json.dumps({"type": "status", "text": "Slack search skipped (disabled)"}))
 
-    # ── Git log ─────────────────────────────────────────────────────────────
+    # ── Git history (structured via git_collector) ───────────────────────────
     await ws.send(json.dumps({"type": "status", "text": f"Running git log for {ticket_id}…"}))
-    git_text = await _run_in_executor(_git_log_for_keyword, ticket_id)
+    git_text = await _run_in_executor(_run_git_collector, ticket_id)
 
     return task_content, slack_text, git_text
 
@@ -175,7 +219,6 @@ async def _gather_slack_thread(ws, url: str, token: str | None) -> str:
 
 async def _gather_description(ws, description: str, token: str | None) -> tuple[str, str]:
     from bridge_modules.shared import _run_in_executor
-    from bridge_modules.triage_handlers import _git_log_for_keyword
     from bridge_slack import _slack_search_channels
 
     words = [
@@ -195,8 +238,7 @@ async def _gather_description(ws, description: str, token: str | None) -> tuple[
     git_text = ""
     if keywords:
         await ws.send(json.dumps({"type": "status", "text": "Searching git history…"}))
-        for kw in keywords[:2]:
-            git_text += await _run_in_executor(_git_log_for_keyword, kw) + "\n"
+        git_text = await _run_in_executor(_run_git_collector, keywords[0], keywords[1:])
 
     return slack_text, git_text
 

@@ -34,9 +34,37 @@ def _build_stacktrace_header(parsed: dict) -> str:
     )
 
 
+# ── Platform context (injected into Fix Advisor + Minimal Fix task blocks) ────
+
+_HKJC_PLATFORM_CONTEXT = """\
+## Platform context
+
+This issue is from the **HKJC betting platform** — a Java 21 / Spring Boot monorepo.
+
+**Codebase layout:**
+- Deployable services live under `app/ats-*/` — each `ats-*` subdirectory is a
+  distinct application. Service names in commit messages, Slack, and stack traces
+  (e.g. `ats-sportsbook`, `ats-payments`) map directly to these folders.
+- Shared libraries (utilities, cross-cutting concerns, domain logic) live under
+  `lib/` with no `ats-` prefix. A service typically wraps one or more libraries.
+
+**Common anti-patterns to watch for — flag these in Tech Debt sections:**
+- Bespoke DTO conversion code instead of MapStruct — mapping logic that will drift
+- Home-grown caching (custom maps, manual TTL logic) instead of Spring Cache or
+  properly configured Redis integration
+- Hand-rolled DAO/repository classes instead of Spring Data repositories
+- Kafka misconfiguration — binding name mismatches, manual-vs-auto ack confusion,
+  serialiser/deserialiser mismatches, missing dead-letter topic wiring
+- Redis misuse — missing TTL, serialisation inconsistencies, key-space collisions,
+  stale `@Cacheable` entries without matching `@CacheEvict`
+- Inconsistent `@RestController` conventions — missing `@ResponseStatus`, non-uniform
+  error response shapes, ad-hoc `ResponseEntity` usage alongside annotated responses
+
+"""
+
 # ── Fix Advisor prompts ───────────────────────────────────────────────────────
 
-_FIX_ADVISOR_TASK = """\
+_FIX_ADVISOR_TASK = _HKJC_PLATFORM_CONTEXT + """\
 ## Your task
 
 Produce a **Fix Advisor** report with the following sections:
@@ -119,7 +147,7 @@ def fix_advisor_stacktrace(
 
 # ── Minimal Fix prompts ───────────────────────────────────────────────────────
 
-_MINIMAL_FIX_TASK = """\
+_MINIMAL_FIX_TASK = _HKJC_PLATFORM_CONTEXT + """\
 ## Your task
 
 Produce a **Minimal Fix** report. Focus on the smallest safe change — not the ideal

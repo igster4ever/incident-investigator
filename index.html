@@ -149,6 +149,19 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 
 /* ── Output tab bar ── */
+#run-history {
+  display: none; flex-shrink: 0; align-items: center; gap: 6px; flex-wrap: nowrap;
+  padding: 5px 14px; border-bottom: 1px solid #1e293b; background: #060e1a;
+  overflow-x: auto;
+}
+.run-chip {
+  padding: 2px 10px; border: 1px solid #1e293b; border-radius: 12px;
+  background: none; color: #64748b; font-size: 10px; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.run-chip:hover { border-color: #334155; color: #94a3b8; }
+.run-chip.active { border-color: #3b82f6; color: #93c5fd; background: #0f1f3d; }
 #output-tabs {
   display: none; flex-shrink: 0;
   border-bottom: 1px solid #1e293b; background: #060e1a;
@@ -464,6 +477,9 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
     </div>
   </div>
 
+  <!-- ── Run history strip (hidden until 2+ runs) ── -->
+  <div id="run-history"></div>
+
   <!-- ── Output tab bar (hidden until wiki article available) ── -->
   <div id="output-tabs">
     <button id="tab-report" class="out-tab active" onclick="iiShowTab('report')">&#128203; Report</button>
@@ -506,7 +522,9 @@ textarea.text-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   <div id="footer">
     <div id="report-badges"></div>
     <button id="followup-btn" class="act-btn primary" onclick="iiFollowUp()" style="display:none">&#128295; Code Change Suggestions</button>
-    <button id="save-btn"     class="act-btn"         onclick="iiSave()"     style="display:none">&#8659; Save .md</button>
+    <button id="save-btn"      class="act-btn"         onclick="iiSave()"        style="display:none">&#8659; Save .md</button>
+    <button id="regen-btn"     class="act-btn"         onclick="iiRegenerate()"  style="display:none">&#8635; Regenerate</button>
+    <button id="fork-btn"      class="act-btn"         onclick="iiFork()"        style="display:none">&#8628; Fork from here</button>
     <span id="followup-status"></span>
     <!-- Borderline confidence prompt -->
     <div id="wiki-save-chip">
@@ -549,6 +567,8 @@ var _slackEnabled = true;
 var _ws        = null;
 var _token     = null;
 var _lastReport   = '';
+var _runHistory   = [];   // [{analysis,mode,input,depth,report,conf,ts}]
+var _viewingRun   = -1;   // index of run currently shown; -1 = none
 var _lastAnalysis = '';
 var _lastMode     = '';
 var _lastInput    = '';
@@ -790,6 +810,78 @@ function _dispatch(msg) {
   }
 }
 
+// ── Run history ─────────────────────────────────────────────────────────────
+
+var _RUN_LABELS = { triage: 'triage', fix_advisor: 'fix', minimal_fix: 'minimal', perf_advisor: 'perf' };
+
+function _fmtTime(d) {
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function _pushRun(report, msg) {
+  _runHistory.push({
+    analysis: _analysis,
+    mode:     _lastMode,
+    input:    _lastInput,
+    depth:    _depth,
+    report:   report,
+    conf:     msg && msg.confidence,
+    ts:       new Date()
+  });
+  _viewingRun = _runHistory.length - 1;
+  _renderRunStrip();
+}
+
+function _renderRunStrip() {
+  var strip = document.getElementById('run-history');
+  if (!strip) return;
+  if (_runHistory.length < 2) { strip.style.display = 'none'; return; }
+  while (strip.firstChild) strip.removeChild(strip.firstChild);
+  _runHistory.forEach(function(r, i) {
+    var btn = document.createElement('button');
+    btn.className = 'run-chip' + (i === _viewingRun ? ' active' : '');
+    btn.textContent = 'Run ' + (i + 1) + ' \xb7 ' + (_RUN_LABELS[r.analysis] || r.analysis) + ' \xb7 ' + _fmtTime(r.ts);
+    btn.addEventListener('click', (function(idx) { return function() { _switchRun(idx); }; })(i));
+    strip.appendChild(btn);
+  });
+  strip.style.display = 'flex';
+}
+
+function _switchRun(idx) {
+  if (idx < 0 || idx >= _runHistory.length) return;
+  var run = _runHistory[idx];
+  _viewingRun = idx;
+  _lastReport = run.report;
+  var out = document.getElementById('output');
+  if (out) { out.textContent = run.report; _applyTheme(); }
+  _renderReportBadges(run.report, run.conf);
+  _renderRunStrip();
+  var isLatest = (idx === _runHistory.length - 1);
+  var fb = document.getElementById('fork-btn');
+  var rb = document.getElementById('regen-btn');
+  if (fb) fb.style.display = isLatest ? 'none' : '';
+  if (rb) rb.style.display = isLatest ? '' : 'none';
+}
+
+window.iiFork = function() {
+  if (_viewingRun < 0 || _viewingRun >= _runHistory.length) return;
+  var run = _runHistory[_viewingRun];
+  iiSetAnalysis(run.analysis);
+  iiSetInputMode(run.mode);
+  if (run.depth) iiSetDepth(run.depth);
+  var inputId = 'val-' + run.mode;
+  var el = document.getElementById(inputId);
+  if (el) { el.value = run.input; el.focus(); }
+  // Show the latest run's output so user can compare after re-running
+  _switchRun(_runHistory.length - 1);
+  var inputArea = document.querySelector('.input-mode-btn.active');
+  if (inputArea) inputArea.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+
+window.iiRegenerate = function() {
+  iiGenerate();
+};
+
 function _onComplete(report, msg) {
   var tp = document.getElementById('thinking-panel');
   var tg = document.getElementById('thinking-toggle');
@@ -800,6 +892,8 @@ function _onComplete(report, msg) {
   _wikiPending = false;
   var out = document.getElementById('output');
   if (out) { out.textContent = report; _applyTheme(); }
+
+  _pushRun(report, msg);
 
   _enableGenBtn();
   _setStatus('✓ Done');
@@ -818,11 +912,15 @@ function _onComplete(report, msg) {
     }
   }
 
-  var mode  = _MODES[_analysis];
-  var fb    = document.getElementById('followup-btn');
-  var saveb = document.getElementById('save-btn');
-  if (fb)    fb.style.display    = (report && mode && mode.hasFollowup) ? '' : 'none';
-  if (saveb) saveb.style.display = report ? '' : 'none';
+  var mode   = _MODES[_analysis];
+  var fb     = document.getElementById('followup-btn');
+  var saveb  = document.getElementById('save-btn');
+  var regenb = document.getElementById('regen-btn');
+  var forkb  = document.getElementById('fork-btn');
+  if (fb)     fb.style.display    = (report && mode && mode.hasFollowup) ? '' : 'none';
+  if (saveb)  saveb.style.display = report ? '' : 'none';
+  if (regenb) regenb.style.display = report ? '' : 'none';
+  if (forkb)  forkb.style.display = 'none';
 
   // ── Wiki state from server ─────────────────────────────────────────────────
   _showWikiChip(null);
@@ -1078,6 +1176,8 @@ window.iiGenerate = function() {
 
   document.getElementById('followup-btn').style.display  = 'none';
   document.getElementById('save-btn').style.display      = 'none';
+  var _rb = document.getElementById('regen-btn'); if (_rb) _rb.style.display = 'none';
+  var _fkb = document.getElementById('fork-btn'); if (_fkb) _fkb.style.display = 'none';
   document.getElementById('followup-status').textContent = '';
 
   // Reset wiki state
