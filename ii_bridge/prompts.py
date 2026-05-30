@@ -18,6 +18,9 @@ _NO_TOOLS_PREAMBLE = (
     "call any tools, fetch URLs, read files, or query external systems.\n\n"
 )
 
+
+# ── Shared evidence-block builders ───────────────────────────────────────────
+
 def _build_stacktrace_header(parsed: dict) -> str:
     exception_type = (parsed.get("primary_exception") or {}).get("type", "Unknown")
     exception_msg  = (parsed.get("primary_exception") or {}).get("message", "")
@@ -31,6 +34,36 @@ def _build_stacktrace_header(parsed: dict) -> str:
         f"Message: {exception_msg}\n"
         f"Affected services: {', '.join(services) or 'unknown'}\n"
         f"Top project frames: {', '.join(f for f in frames if f) or 'none'}\n\n"
+    )
+
+
+def _build_stacktrace_evidence(stacktrace: str, parsed: dict, code_ctx: str, git_ctx: str) -> str:
+    return (
+        _build_stacktrace_header(parsed)
+        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
+        f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
+        f"## Raw stack trace (first 40 lines):\n"
+        f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"
+    )
+
+
+def _build_clickup_evidence(ticket_id: str, slack_text: str, git_text: str, task_content: str = "") -> str:
+    return (
+        (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
+        + f"## Slack context (mentions of {ticket_id}):\n"
+        f"{slack_text or '(no Slack mentions found)'}\n\n"
+        f"## Git history (commits referencing {ticket_id}):\n"
+        f"{git_text or '(no matching commits)'}\n\n"
+    )
+
+
+def _build_description_evidence(description: str, slack_text: str, git_text: str) -> str:
+    return (
+        f"## Incident description:\n{description}\n\n"
+        f"## Related Slack context:\n"
+        f"{slack_text or '(no relevant Slack activity found)'}\n\n"
+        f"## Related git history:\n"
+        f"{git_text or '(no matching commits found)'}\n\n"
     )
 
 
@@ -96,14 +129,11 @@ Call out any underlying issue that this fix does not address and should be track
 
 
 def fix_advisor_clickup(ticket_id: str, slack_text: str, git_text: str, task_content: str = "") -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
-        f"## Ticket: {ticket_id}\n\n"
-        + (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
-        + f"## Slack context (mentions of {ticket_id}):\n"
-        f"{slack_text or '(no Slack mentions found)'}\n\n"
-        f"## Git history (commits referencing {ticket_id}):\n"
-        f"{git_text or '(no matching commits)'}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
+        + f"## Ticket: {ticket_id}\n\n"
+        + _build_clickup_evidence(ticket_id, slack_text, git_text, task_content)
         + _FIX_ADVISOR_TASK
     )
 
@@ -117,13 +147,10 @@ def fix_advisor_slack_thread(thread_text: str) -> str:
 
 
 def fix_advisor_description(description: str, slack_text: str, git_text: str) -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
-        f"## Incident description:\n{description}\n\n"
-        f"## Related Slack context:\n"
-        f"{slack_text or '(no relevant Slack activity found)'}\n\n"
-        f"## Related git history:\n"
-        f"{git_text or '(no matching commits found)'}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead advising on how to fix a reported incident.\n\n"
+        + _build_description_evidence(description, slack_text, git_text)
         + _FIX_ADVISOR_TASK
     )
 
@@ -134,13 +161,10 @@ def fix_advisor_stacktrace(
     code_ctx: str,
     git_ctx: str,
 ) -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead advising on how to fix a Java exception.\n\n"
-        + _build_stacktrace_header(parsed)
-        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
-        f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
-        f"## Raw stack trace (first 40 lines):\n"
-        f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead advising on how to fix a Java exception.\n\n"
+        + _build_stacktrace_evidence(stacktrace, parsed, code_ctx, git_ctx)
         + _FIX_ADVISOR_TASK
     )
 
@@ -181,14 +205,11 @@ List 2–4 concrete follow-up items that should be tracked separately.
 
 
 def minimal_fix_clickup(ticket_id: str, slack_text: str, git_text: str, task_content: str = "") -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
-        f"## Ticket: {ticket_id}\n\n"
-        + (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
-        + f"## Slack context (mentions of {ticket_id}):\n"
-        f"{slack_text or '(no Slack mentions found)'}\n\n"
-        f"## Git history (commits referencing {ticket_id}):\n"
-        f"{git_text or '(no matching commits)'}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
+        + f"## Ticket: {ticket_id}\n\n"
+        + _build_clickup_evidence(ticket_id, slack_text, git_text, task_content)
         + _MINIMAL_FIX_TASK
     )
 
@@ -202,13 +223,10 @@ def minimal_fix_slack_thread(thread_text: str) -> str:
 
 
 def minimal_fix_description(description: str, slack_text: str, git_text: str) -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
-        f"## Incident description:\n{description}\n\n"
-        f"## Related Slack context:\n"
-        f"{slack_text or '(no relevant Slack activity found)'}\n\n"
-        f"## Related git history:\n"
-        f"{git_text or '(no matching commits found)'}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead advising on the smallest safe fix for a reported incident.\n\n"
+        + _build_description_evidence(description, slack_text, git_text)
         + _MINIMAL_FIX_TASK
     )
 
@@ -219,13 +237,10 @@ def minimal_fix_stacktrace(
     code_ctx: str,
     git_ctx: str,
 ) -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead advising on the smallest safe fix for a Java exception.\n\n"
-        + _build_stacktrace_header(parsed)
-        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
-        f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
-        f"## Raw stack trace (first 40 lines):\n"
-        f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead advising on the smallest safe fix for a Java exception.\n\n"
+        + _build_stacktrace_evidence(stacktrace, parsed, code_ctx, git_ctx)
         + _MINIMAL_FIX_TASK
     )
 
@@ -295,14 +310,11 @@ Aim for ~2 000–4 000 tokens.
 
 
 def perf_advisor_clickup_prompt(ticket_id: str, slack_text: str, git_text: str, depth: str = "standard", task_content: str = "") -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead identifying and resolving performance bottlenecks.\n\n"
-        f"## Ticket: {ticket_id}\n\n"
-        + (f"## Ticket description:\n{task_content}\n\n" if task_content else "")
-        + f"## Slack context (mentions of {ticket_id}):\n"
-        f"{slack_text or '(no Slack mentions found)'}\n\n"
-        f"## Git history (commits referencing {ticket_id}):\n"
-        f"{git_text or '(no matching commits)'}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead identifying and resolving performance bottlenecks.\n\n"
+        + f"## Ticket: {ticket_id}\n\n"
+        + _build_clickup_evidence(ticket_id, slack_text, git_text, task_content)
         + _perf_depth_instructions(depth)
     )
 
@@ -343,12 +355,9 @@ def perf_advisor_stacktrace_prompt(
     git_ctx: str,
     depth: str = "standard",
 ) -> str:
-    return _NO_TOOLS_PREAMBLE + (
-        f"You are a senior engineering lead identifying performance bottlenecks from a Java stack trace.\n\n"
-        + _build_stacktrace_header(parsed)
-        + f"## Code context at crash site:\n{code_ctx or '(unavailable)'}\n\n"
-        f"## Recent git history for affected files:\n{git_ctx or '(unavailable)'}\n\n"
-        f"## Raw stack trace (first 40 lines):\n"
-        f"{chr(10).join(stacktrace.splitlines()[:40])}\n\n"
+    return (
+        _NO_TOOLS_PREAMBLE
+        + f"You are a senior engineering lead identifying performance bottlenecks from a Java stack trace.\n\n"
+        + _build_stacktrace_evidence(stacktrace, parsed, code_ctx, git_ctx)
         + _perf_depth_instructions(depth)
     )

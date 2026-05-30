@@ -548,6 +548,82 @@ class TestConfidenceGatedWikiSave:
         assert "confidence" not in complete
 
 
+# ── Keyword extraction ───────────────────────────────────────────────────────
+
+class TestExtractDescriptionKeywords:
+
+    def test_returns_up_to_three_keywords(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        result = _extract_description_keywords("payment service crashed with timeout causing failure")
+        assert len(result) <= 3
+
+    def test_filters_stopwords(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        result = _extract_description_keywords("that this with from have been when there after")
+        assert result == []
+
+    def test_deduplicates_preserving_order(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        result = _extract_description_keywords("cache cache cache timeout")
+        assert result.count("cache") == 1
+        assert result[0] == "cache"
+
+    def test_minimum_word_length_four_chars(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        result = _extract_description_keywords("db io net timeout failure")
+        assert "db" not in result
+        assert "io" not in result
+        assert "timeout" in result
+
+    def test_empty_string_returns_empty(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        assert _extract_description_keywords("") == []
+
+    def test_preserves_order_of_first_occurrence(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        result = _extract_description_keywords("payment service crashed")
+        assert result == ["payment", "service", "crashed"]
+
+    def test_caps_at_three_results(self):
+        from ii_bridge.handlers import _extract_description_keywords
+        result = _extract_description_keywords("alpha beta gamma delta epsilon")
+        assert result == ["alpha", "beta", "gamma"]
+
+
+# ── Perf Advisor depth coverage ───────────────────────────────────────────────
+
+class TestPerfAdvisorCompleteCoverage:
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("depth", ["quick", "standard", "full"])
+    async def test_clickup_all_depths_emit_complete_with_report(self, mock_ws, depth):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch("perf"), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "clickup", "input": "AOP-1", "depth": depth})
+        complete = mock_ws.last_of_type("perf_advisor_complete")
+        assert complete is not None
+        assert complete["report"] == "perf"
+        assert "wiki_status" not in complete
+        assert "wiki_path" not in complete
+        assert "confidence" not in complete
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("depth", ["quick", "standard", "full"])
+    async def test_stacktrace_all_depths_emit_complete_with_report(self, mock_ws, depth):
+        with _make_no_token_patch(), _make_executor_patch(return_value={}), _make_stream_patch("perf"), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "stacktrace", "input": "NPE at Foo", "depth": depth})
+        complete = mock_ws.last_of_type("perf_advisor_complete")
+        assert complete is not None
+        assert complete["report"] == "perf"
+        assert "wiki_status" not in complete
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("depth", ["quick", "standard", "full"])
+    async def test_description_all_depths_emit_complete(self, mock_ws, depth):
+        with _make_no_token_patch(), _make_executor_patch(), _make_stream_patch("perf"), _make_repo_path_patch():
+            await _handle_perf_advisor(mock_ws, {"mode": "description", "input": "the service is slow", "depth": depth})
+        assert mock_ws.last_of_type("perf_advisor_complete") is not None
+
+
 # ── HANDLERS dict ─────────────────────────────────────────────────────────────
 
 class TestHandlersDict:

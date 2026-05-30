@@ -701,13 +701,6 @@ function _dispatch(msg) {
     return;
   }
 
-  // triage_progress also carries a .text field (legacy shape)
-  if (type === 'triage_progress') {
-    var out2 = document.getElementById('output');
-    if (out2) { out2.textContent = msg.text || ''; _applyTheme(); out2.scrollTop = out2.scrollHeight; }
-    return;
-  }
-
   // Complete events
   if (type === 'triage_complete') {
     _onComplete(msg.report || '', msg);
@@ -1401,6 +1394,7 @@ document.addEventListener('DOMContentLoaded', function() {
   var hash = window.location.hash.replace('#token=', '');
   if (hash && !_token) {
     document.getElementById('token-input').value = hash;
+    window.location.hash = '';
   }
 
   // File input → image extraction

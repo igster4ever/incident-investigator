@@ -217,15 +217,19 @@ async def _gather_slack_thread(ws, url: str, token: str | None) -> str:
     return f"(Could not parse or fetch thread: {url})"
 
 
-async def _gather_description(ws, description: str, token: str | None) -> tuple[str, str]:
-    from bridge_modules.shared import _run_in_executor
-    from bridge_slack import _slack_search_channels
-
+def _extract_description_keywords(description: str) -> list[str]:
     words = [
         w for w in re.findall(r"[a-zA-Z]{4,}", description)
         if w.lower() not in {"that", "this", "with", "from", "have", "been", "when", "there", "after"}
     ]
-    keywords = list(dict.fromkeys(words))[:3]
+    return list(dict.fromkeys(words))[:3]
+
+
+async def _gather_description(ws, description: str, token: str | None) -> tuple[str, str]:
+    from bridge_modules.shared import _run_in_executor
+    from bridge_slack import _slack_search_channels
+
+    keywords = _extract_description_keywords(description)
 
     slack_text = ""
     if token and keywords:
@@ -268,12 +272,21 @@ async def _handle_incident_mode(
     progress_event: str,
     complete_event: str,
     prompt_fns: dict,
+    wiki_save: bool = True,
+    description_handler=None,
 ) -> None:
     """
-    Shared handler skeleton for fix_advisor and minimal_fix.
+    Shared handler skeleton for Fix Advisor, Minimal Fix, and Perf Advisor.
 
-    prompt_fns must have keys: clickup, slack_thread, description, stacktrace.
-    Each value is a callable that returns the prompt string.
+    prompt_fns must have keys: clickup, slack_thread, stacktrace.
+    description key is required when description_handler is None.
+
+    description_handler: optional async(ws, input_val, token) -> str | None
+      When provided, replaces the default _gather_description + prompt_fns["description"]
+      path for description mode (and unknown-mode fallback). Return None to indicate the
+      handler has already sent its own response (e.g. fetch_required).
+
+    wiki_save: when False, emits {type, report} only — no wiki confidence-gating.
     """
     from bridge_modules.shared import _stream_claude_to_ws, _read_slack_token
 
@@ -284,9 +297,9 @@ async def _handle_incident_mode(
         await ws.send(json.dumps({"type": "error", "message": "No input provided"}))
         return
 
-    token        = _read_slack_token()
+    token         = _read_slack_token()
     slack_enabled = bool(payload.get("slack_enabled", True))
-    prompt = ""
+    prompt        = ""
 
     try:
         if mode == "clickup":
@@ -299,21 +312,24 @@ async def _handle_incident_mode(
             thread_text = await _gather_slack_thread(ws, input_val, token)
             prompt = prompt_fns["slack_thread"](thread_text)
 
-        elif mode == "description":
-            slack_text, git_text = await _gather_description(ws, input_val, token)
-            prompt = prompt_fns["description"](input_val, slack_text, git_text)
-
         elif mode == "stacktrace":
             parsed, code_ctx, git_ctx = await _gather_stacktrace(ws, input_val)
             prompt = prompt_fns["stacktrace"](input_val, parsed, code_ctx, git_ctx)
 
         else:
-            await ws.send(json.dumps({
-                "type": "status",
-                "text": f"Warning: unknown input mode '{mode}' — falling back to description",
-            }))
-            slack_text, git_text = await _gather_description(ws, input_val, token)
-            prompt = prompt_fns["description"](input_val, slack_text, git_text)
+            # description mode, or unknown mode falling back to description
+            if mode != "description":
+                await ws.send(json.dumps({
+                    "type": "status",
+                    "text": f"Warning: unknown input mode '{mode}' — falling back to description",
+                }))
+            if description_handler is not None:
+                prompt = await description_handler(ws, input_val, token)
+                if prompt is None:
+                    return  # handler sent its own response (e.g. fetch_required)
+            else:
+                slack_text, git_text = await _gather_description(ws, input_val, token)
+                prompt = prompt_fns["description"](input_val, slack_text, git_text)
 
     except Exception as exc:
         await ws.send(json.dumps({"type": "error", "message": f"Data gathering failed: {exc}"}))
@@ -321,6 +337,10 @@ async def _handle_incident_mode(
 
     await ws.send(json.dumps({"type": "status", "text": "Analysing with Claude…"}))
     report = await _stream_claude_to_ws(ws, prompt, progress_event=progress_event)
+
+    if not wiki_save:
+        await ws.send(json.dumps({"type": complete_event, "report": report}))
+        return
 
     # ── Wiki save (confidence-gated) ──────────────────────────────────────────
     analysis    = complete_event.replace("_complete", "")
@@ -380,88 +400,82 @@ async def _handle_minimal_fix(ws, payload: dict) -> None:
     )
 
 
+async def _perf_description_handler(
+    ws,
+    input_val: str,
+    token,
+    *,
+    depth: str,
+    repo_roots: list[str],
+) -> str | None:
+    """ContentType-aware description gatherer for Perf Advisor.
+
+    Returns a prompt string, or None if it has already sent its own response
+    (fetch_required on file/commit lookup failure).
+    """
+    content_type = detect_content_type(input_val)
+
+    if content_type == ContentType.COMMIT_HASH:
+        await ws.send(json.dumps({"type": "status", "text": "Fetching commit diff…"}))
+        try:
+            content        = fetch_commit_diff(input_val, repo_roots)
+            content_source = f"commit_diff:{input_val}"
+        except FetchError as exc:
+            await ws.send(json.dumps({
+                "type": "fetch_required",
+                "reason": "commit_not_found",
+                "message": str(exc),
+            }))
+            return None
+
+    elif content_type == ContentType.FILE_METHOD:
+        await ws.send(json.dumps({"type": "status", "text": "Fetching file/method…"}))
+        parts      = input_val.split("#", 1)
+        file_path  = parts[0]
+        method     = parts[1] if len(parts) > 1 else None
+        try:
+            content        = fetch_file_method(file_path, method, repo_roots)
+            content_source = f"file_method:{input_val}"
+        except FetchError as exc:
+            await ws.send(json.dumps({
+                "type": "fetch_required",
+                "reason": "file_not_found",
+                "message": str(exc),
+            }))
+            return None
+
+    elif content_type == ContentType.CODE_BLOCK:
+        content        = input_val
+        content_source = "code_block"
+
+    else:
+        content        = input_val
+        content_source = "free_text"
+
+    return perf_advisor_description_prompt(content, content_source, depth)
+
+
 async def _handle_perf_advisor(ws, payload: dict) -> None:
-    from bridge_modules.shared import _stream_claude_to_ws, _read_slack_token
     from bridge_modules.triage_handlers import _REPO_PATH
+    depth      = (payload.get("depth") or "standard").strip()
+    repo_roots = [str(_REPO_PATH)]
 
-    mode      = (payload.get("mode")  or "description").strip()
-    input_val = (payload.get("input") or "").strip()
-    depth     = (payload.get("depth") or "standard").strip()
+    async def _desc_handler(ws_inner, input_val, token):
+        return await _perf_description_handler(ws_inner, input_val, token, depth=depth, repo_roots=repo_roots)
 
-    if not input_val:
-        await ws.send(json.dumps({"type": "error", "message": "No input provided"}))
-        return
-
-    token         = _read_slack_token()
-    slack_enabled = bool(payload.get("slack_enabled", True))
-    repo_roots    = [str(_REPO_PATH)]
-    prompt        = ""
-
-    try:
-        if mode == "clickup":
-            task_content, slack_text, git_text = await _gather_clickup(
-                ws, input_val.upper(), token, slack_enabled=slack_enabled
-            )
-            prompt = perf_advisor_clickup_prompt(input_val.upper(), slack_text, git_text, depth, task_content)
-
-        elif mode == "slack_thread":
-            thread_text = await _gather_slack_thread(ws, input_val, token)
-            prompt = perf_advisor_slack_prompt(thread_text, depth)
-
-        elif mode == "stacktrace":
-            parsed, code_ctx, git_ctx = await _gather_stacktrace(ws, input_val)
-            prompt = perf_advisor_stacktrace_prompt(input_val, parsed, code_ctx, git_ctx, depth)
-
-        else:
-            # description — detect content type and auto-fetch if needed
-            content_type = detect_content_type(input_val)
-
-            if content_type == ContentType.COMMIT_HASH:
-                await ws.send(json.dumps({"type": "status", "text": "Fetching commit diff…"}))
-                try:
-                    content = fetch_commit_diff(input_val, repo_roots)
-                    content_source = f"commit_diff:{input_val}"
-                except FetchError as exc:
-                    await ws.send(json.dumps({
-                        "type": "fetch_required",
-                        "reason": "commit_not_found",
-                        "message": str(exc),
-                    }))
-                    return
-
-            elif content_type == ContentType.FILE_METHOD:
-                await ws.send(json.dumps({"type": "status", "text": "Fetching file/method…"}))
-                parts      = input_val.split("#", 1)
-                file_path  = parts[0]
-                method     = parts[1] if len(parts) > 1 else None
-                try:
-                    content = fetch_file_method(file_path, method, repo_roots)
-                    content_source = f"file_method:{input_val}"
-                except FetchError as exc:
-                    await ws.send(json.dumps({
-                        "type": "fetch_required",
-                        "reason": "file_not_found",
-                        "message": str(exc),
-                    }))
-                    return
-
-            elif content_type == ContentType.CODE_BLOCK:
-                content        = input_val
-                content_source = "code_block"
-
-            else:
-                content        = input_val
-                content_source = "free_text"
-
-            prompt = perf_advisor_description_prompt(content, content_source, depth)
-
-    except Exception as exc:
-        await ws.send(json.dumps({"type": "error", "message": f"Data gathering failed: {exc}"}))
-        return
-
-    await ws.send(json.dumps({"type": "status", "text": "Analysing with Claude…"}))
-    report = await _stream_claude_to_ws(ws, prompt, progress_event="perf_advisor_progress")
-    await ws.send(json.dumps({"type": "perf_advisor_complete", "report": report}))
+    await _handle_incident_mode(
+        ws,
+        payload,
+        progress_event="perf_advisor_progress",
+        complete_event="perf_advisor_complete",
+        prompt_fns={
+            "clickup":      lambda tid, st, gt, tc="": perf_advisor_clickup_prompt(tid, st, gt, depth, tc),
+            "slack_thread": lambda tt: perf_advisor_slack_prompt(tt, depth),
+            "stacktrace":   lambda st, p, cc, gc: perf_advisor_stacktrace_prompt(st, p, cc, gc, depth),
+        },
+        wiki_save=False,
+        description_handler=_desc_handler,
+    )
 
 
 async def _handle_save_to_wiki(ws, payload: dict) -> None:
