@@ -14,30 +14,19 @@ env var before starting the bridge.
 
 from __future__ import annotations
 
-import os
 import urllib.request
 import urllib.error
 import json
-from pathlib import Path
 
-_TOKEN_PATH = Path.home() / ".claude" / "skills" / "shared" / ".clickup_token"
-_API_BASE   = "https://api.clickup.com/api/v2"
+from ii_bridge.token_utils import read_clickup_token
+
+_API_BASE = "https://api.clickup.com/api/v2"
 
 _CACHE_TEAM_ID: str | None = None
 
 
 class ClickUpError(Exception):
     pass
-
-
-def _read_token() -> str | None:
-    tok = os.environ.get("CLICKUP_TOKEN", "").strip()
-    if tok:
-        return tok
-    if _TOKEN_PATH.exists():
-        tok = _TOKEN_PATH.read_text().strip()
-        return tok or None
-    return None
 
 
 def _get(path: str, token: str) -> dict:
@@ -77,7 +66,7 @@ def fetch_clickup_task(ticket_id: str) -> str | None:
     Returns a formatted string on success, None on any failure (missing token,
     network error, task not found).
     """
-    token = _read_token()
+    token = read_clickup_token()
     if not token:
         return None
 

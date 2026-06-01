@@ -805,10 +805,50 @@ function _dispatch(msg) {
 
 // ── Run history ─────────────────────────────────────────────────────────────
 
-var _RUN_LABELS = { triage: 'triage', fix_advisor: 'fix', minimal_fix: 'minimal', perf_advisor: 'perf' };
+var _RUN_LABELS    = { triage: 'triage', fix_advisor: 'fix', minimal_fix: 'minimal', perf_advisor: 'perf' };
+var _RUN_HIST_KEY  = 'ii_run_history';
+var _RUN_HIST_MAX  = 20;
 
 function _fmtTime(d) {
   return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function _saveRunHistory() {
+  try {
+    var payload = _runHistory.map(function(r) {
+      return {
+        analysis: r.analysis, mode: r.mode, input: r.input,
+        depth: r.depth, report: r.report, conf: r.conf,
+        ts: r.ts instanceof Date ? r.ts.toISOString() : r.ts
+      };
+    });
+    localStorage.setItem(_RUN_HIST_KEY, JSON.stringify(payload));
+  } catch(e) {}
+}
+
+function _loadRunHistory() {
+  try {
+    var raw = localStorage.getItem(_RUN_HIST_KEY);
+    if (!raw) return;
+    var saved = JSON.parse(raw);
+    if (!Array.isArray(saved) || saved.length === 0) return;
+    _runHistory = saved.map(function(r) {
+      return {
+        analysis: r.analysis, mode: r.mode, input: r.input,
+        depth: r.depth || 'standard', report: r.report, conf: r.conf,
+        ts: new Date(r.ts)
+      };
+    });
+    _viewingRun = _runHistory.length - 1;
+    _renderRunStrip();
+    var last = _runHistory[_viewingRun];
+    _lastReport = last.report;
+    var out = document.getElementById('output');
+    if (out) { out.textContent = last.report; _applyTheme(); }
+    _renderReportBadges(last.report, last.conf);
+  } catch(e) {
+    localStorage.removeItem(_RUN_HIST_KEY);
+  }
 }
 
 function _pushRun(report, msg) {
@@ -821,8 +861,10 @@ function _pushRun(report, msg) {
     conf:     msg && msg.confidence,
     ts:       new Date()
   });
+  if (_runHistory.length > _RUN_HIST_MAX) _runHistory = _runHistory.slice(-_RUN_HIST_MAX);
   _viewingRun = _runHistory.length - 1;
   _renderRunStrip();
+  _saveRunHistory();
 }
 
 function _renderRunStrip() {
@@ -1390,6 +1432,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('token-gate').classList.add('hidden');
     _connect();
   }
+  _loadRunHistory();
   // Pre-fill token input if available from URL hash (dev convenience)
   var hash = window.location.hash.replace('#token=', '');
   if (hash && !_token) {

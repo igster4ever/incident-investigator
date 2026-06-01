@@ -17,6 +17,7 @@ open directly in a browser. Analysis is delegated to the GPS·ADR Radar bridge s
 | `ii_bridge/clickup_fetcher.py` | ClickUp REST API client — fetches task name + description by custom task ID; `reset_clickup_cache()` |
 | `ii_bridge/connectivity_handler.py` | `_handle_check_connectivity` (ping Slack + ClickUp), `_handle_update_token` (write token file, re-ping, emit status) |
 | `ii_bridge/fetcher.py` | Content-type detection; file/method + commit diff auto-fetch for Perf Advisor |
+| `ii_bridge/token_utils.py` | Shared token-reading helpers — `read_clickup_token()`, `read_slack_token()`, `read_token_file()` |
 | `ii_bridge/__init__.py` | Exports `HANDLERS` dict |
 | `tests/conftest.py` | Mock WS fixture + sys.path wiring |
 | `tests/test_prompts.py` | Prompt builder unit tests |

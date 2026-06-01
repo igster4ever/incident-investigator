@@ -26,21 +26,17 @@ import asyncio
 import json
 import urllib.request
 import urllib.error
-from pathlib import Path
 
-_SLACK_TOKEN_PATH   = Path.home() / ".claude" / "skills" / "shared" / ".slack_token"
-_CLICKUP_TOKEN_PATH = Path.home() / ".claude" / "skills" / "shared" / ".clickup_token"
-_CLICKUP_API_BASE   = "https://api.clickup.com/api/v2"
-_SLACK_API_BASE     = "https://slack.com/api"
+from ii_bridge.token_utils import (
+    CLICKUP_TOKEN_PATH  as _CLICKUP_TOKEN_PATH,
+    SLACK_TOKEN_PATH    as _SLACK_TOKEN_PATH,
+    read_token_file     as _read_token_file,
+    read_clickup_token,
+    read_slack_token,
+)
 
-
-# ── Token helpers ────────────────────────────────────────────────────────────
-
-def _read_token_file(path: Path) -> str | None:
-    if path.exists():
-        tok = path.read_text().strip()
-        return tok or None
-    return None
+_CLICKUP_API_BASE = "https://api.clickup.com/api/v2"
+_SLACK_API_BASE   = "https://slack.com/api"
 
 
 # ── API pings (synchronous — run via _run_in_executor) ───────────────────────
@@ -78,7 +74,7 @@ def _ping_slack(token: str) -> tuple[bool, str | None]:
 # ── Status builders (synchronous) ────────────────────────────────────────────
 
 def _check_slack() -> dict:
-    token = _read_token_file(_SLACK_TOKEN_PATH)
+    token = read_slack_token()
     token_set = token is not None
     if token:
         ok, error = _ping_slack(token)
@@ -91,8 +87,7 @@ def _check_slack() -> dict:
 
 
 def _check_clickup() -> dict:
-    import os
-    token = os.environ.get("CLICKUP_TOKEN", "").strip() or _read_token_file(_CLICKUP_TOKEN_PATH)
+    token = read_clickup_token()
     token_set = bool(_read_token_file(_CLICKUP_TOKEN_PATH))
     if token:
         ok, error = _ping_clickup(token)

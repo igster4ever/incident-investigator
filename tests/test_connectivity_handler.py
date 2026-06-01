@@ -91,7 +91,7 @@ class TestCheckSlack:
         tok_file = tmp_path / ".slack_token"
         tok_file.write_text("xoxb-valid")
         with (
-            patch("ii_bridge.connectivity_handler._SLACK_TOKEN_PATH", tok_file),
+            patch("ii_bridge.token_utils.SLACK_TOKEN_PATH", tok_file),
             patch("ii_bridge.connectivity_handler._ping_slack", return_value=(True, None)),
         ):
             result = _check_slack()
@@ -101,7 +101,7 @@ class TestCheckSlack:
         tok_file = tmp_path / ".slack_token"
         tok_file.write_text("xoxb-expired")
         with (
-            patch("ii_bridge.connectivity_handler._SLACK_TOKEN_PATH", tok_file),
+            patch("ii_bridge.token_utils.SLACK_TOKEN_PATH", tok_file),
             patch("ii_bridge.connectivity_handler._ping_slack", return_value=(False, "token_revoked")),
         ):
             result = _check_slack()
@@ -111,7 +111,7 @@ class TestCheckSlack:
 
     def test_no_token_file(self, tmp_path):
         missing = tmp_path / ".slack_token"
-        with patch("ii_bridge.connectivity_handler._SLACK_TOKEN_PATH", missing):
+        with patch("ii_bridge.token_utils.SLACK_TOKEN_PATH", missing):
             result = _check_slack()
         assert result["ok"] is False
         assert result["token_set"] is False
@@ -123,6 +123,7 @@ class TestCheckClickup:
         tok_file = tmp_path / ".clickup_token"
         tok_file.write_text("pk_valid")
         with (
+            patch("ii_bridge.token_utils.CLICKUP_TOKEN_PATH", tok_file),
             patch("ii_bridge.connectivity_handler._CLICKUP_TOKEN_PATH", tok_file),
             patch("os.environ.get", return_value=""),
             patch("ii_bridge.connectivity_handler._ping_clickup", return_value=(True, None)),
@@ -134,6 +135,7 @@ class TestCheckClickup:
     def test_no_token(self, tmp_path):
         missing = tmp_path / ".clickup_token"
         with (
+            patch("ii_bridge.token_utils.CLICKUP_TOKEN_PATH", missing),
             patch("ii_bridge.connectivity_handler._CLICKUP_TOKEN_PATH", missing),
             patch("os.environ.get", return_value=""),
         ):
